@@ -1,0 +1,67 @@
+name: fleetdoctor
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+services:
+  collector:
+    build: .
+    restart: unless-stopped
+    environment:
+      FLEETDOCTOR_NODE_TOKENS: ${FLEETDOCTOR_NODE_TOKENS:?set per-node token JSON}
+      FLEETDOCTOR_FILESYSTEMS: ${FLEETDOCTOR_FILESYSTEMS:-/}
+      PROMETHEUS_URL: http://prometheus:9090
+    ports:
+      - ${COLLECTOR_BIND_IP:-127.0.0.1}:${COLLECTOR_PORT:-8000}:8000
+    healthcheck:
+      test: [CMD, /app/.venv/bin/python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging: *logging
+  postgres:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fleetdoctor
+      POSTGRES_USER: fleetdoctor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set database password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U fleetdoctor -d fleetdoctor]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging: *logging
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.path=/prometheus, --storage.tsdb.retention.time=7d, --storage.tsdb.retention.size=2GB]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - 127.0.0.1:${PROMETHEUS_PORT:-9090}:9090
+    logging: *logging
+  grafana:
+    image: grafana/grafana:12.1.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?set dashboard password}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - 127.0.0.1:${GRAFANA_PORT:-3000}:3000
+    logging: *logging
+volumes:
+  postgres-data:
+  prometheus-data:
+  grafana-data:

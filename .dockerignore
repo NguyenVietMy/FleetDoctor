@@ -1,0 +1,13 @@
+.git
+.agents
+.claude
+.scratch
+.venv
+.env*
+infra
+evidence
+dist
+__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache

@@ -1,0 +1,10 @@
+{
+  "uid": "fleetdoctor-fleet", "title": "FleetDoctor · Fleet", "schemaVersion": 40,
+  "version": 1, "refresh": "5s", "timezone": "utc", "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {"id": 1, "title": "Observation age by node", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "targets": [{"expr": "fleetdoctor_sample_age_seconds", "legendFormat": "{{node}}", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}},
+    {"id": 2, "title": "Stale node (1 = stale)", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}, "targets": [{"expr": "fleetdoctor_node_stale", "legendFormat": "{{node}}", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "short", "min": 0, "max": 1}, "overrides": []}},
+    {"id": 3, "title": "Available filesystem space", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "targets": [{"expr": "fleetdoctor_filesystem_available_bytes", "legendFormat": "{{node}} {{filesystem}}", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}},
+    {"id": 4, "title": "Filesystem source coverage", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "targets": [{"expr": "fleetdoctor_filesystem_coverage_ratio", "legendFormat": "{{node}} {{filesystem}}", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}}
+  ]
+}

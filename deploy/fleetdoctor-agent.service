@@ -1,0 +1,27 @@
+[Unit]
+Description=FleetDoctor host filesystem agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=fleetdoctor
+EnvironmentFile=/etc/fleetdoctor/agent.env
+LoadCredential=ingest-token:/etc/fleetdoctor/ingest-token
+ExecStart=/opt/fleetdoctor/venv/bin/fleetdoctor-agent
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=100M
+TasksMax=16
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

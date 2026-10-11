@@ -1,0 +1,7 @@
+{
+  "source": "Linux statvfs field layout; synthetic reserved-block and unsupported-inode fixtures",
+  "reserved": {"f_frsize": 4096, "f_blocks": 1000, "f_bfree": 400, "f_bavail": 350, "f_files": 100, "f_ffree": 70},
+  "zero": {"f_frsize": 4096, "f_blocks": 0, "f_bfree": 0, "f_bavail": 0, "f_files": 0, "f_ffree": 0},
+  "bad_blocks": {"f_frsize": 4096, "f_blocks": 1000, "f_bfree": 400, "f_bavail": -1, "f_files": 100, "f_ffree": 70},
+  "no_inodes": {"f_frsize": 4096, "f_blocks": 1000, "f_bfree": 400, "f_bavail": 350, "f_files": 0, "f_ffree": 0}
+}

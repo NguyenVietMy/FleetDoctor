@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fleetdoctor"
+version = "0.1.0"
+description = "Linux fleet health observations with explicit coverage and freshness"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.14,<3", "httpx>=0.28,<0.29"]
+
+[project.optional-dependencies]
+collector = ["fastapi>=0.143,<0.144", "uvicorn>=0.54,<0.55", "prometheus-client>=0.26,<0.27"]
+dev = ["pytest>=9.1,<10", "ruff>=0.17,<0.18", "mypy>=2.4,<3", "pyyaml>=6,<7", "types-PyYAML"]
+
+[project.scripts]
+fleetdoctor-agent = "fleetdoctor.agent:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fleetdoctor"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [".agents", ".claude", ".scratch"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+platform = "linux"
+strict = true
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["scripts"]

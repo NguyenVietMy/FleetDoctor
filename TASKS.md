@@ -2,7 +2,7 @@
 
 Approved breakdown: 19 slices. Ticket numbers below are sequential; the discussion column preserves the original numbers, including split slices 3A/3B and validations 13A–13F.
 
-The [PRD](<FleetDoctor PRD.md>) owns requirements, thresholds, windows, and measurement rules. All tickets are unstarted; `ready-for-agent` means the ticket is specified. Work starts when its blockers are complete. The initial frontier is ticket 01.
+The [PRD](<FleetDoctor PRD.md>) owns requirements, thresholds, windows, and measurement rules. Ticket 01 started and passed its AWS acceptance on 2026-10-11; the remaining tickets are unstarted. `ready-for-agent` means the ticket is specified. Work starts when its blockers are complete. The next implementation frontier is ticket 02; see [execution evidence and independent inspection record](docs/task01-evidence.md). Project target: 2026-10-25.
 
 | Ticket | Discussion | Outcome | Blocked by |
 | --- | --- | --- | --- |

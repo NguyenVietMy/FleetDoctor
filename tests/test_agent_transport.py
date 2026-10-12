@@ -15,6 +15,7 @@ from starlette.responses import Response
 from fleetdoctor import agent
 from fleetdoctor.collector import create_app
 from fleetdoctor.schema import Filesystem
+from fleetdoctor.store import FixtureStore
 
 
 def test_production_agent_uploads_at_five_seconds_without_reusing_idle_sockets(
@@ -30,7 +31,7 @@ def test_production_agent_uploads_at_five_seconds_without_reusing_idle_sockets(
         # Signals and /proc belong to the Linux service; exercise transport on either OS.
         monkeypatch.setattr(loop, "add_signal_handler", lambda *args: None)
         token = SecretStr("a" * 40)
-        app = create_app({"node-a": token})
+        app = create_app({"node-a": token}, store=FixtureStore())
         received: list[int] = []
         ports: list[int] = []
         times: list[float] = []
@@ -79,7 +80,8 @@ def test_production_agent_uploads_at_five_seconds_without_reusing_idle_sockets(
                 await asyncio.sleep(0.2)
                 assert received == [0, 1, 2, 3]
                 assert len(set(ports)) == 4, "scheduled uploads reused an idle socket"
-                assert all(4.5 <= b - a <= 5.5 for a, b in zip(times, times[1:], strict=False))
+                intervals = [b - a for a, b in zip(times, times[1:], strict=False)]
+                assert all(4.5 <= interval <= 5.5 for interval in intervals), intervals
                 async with httpx.AsyncClient(trust_env=False) as client:
                     view = (await client.get(address + "/nodes")).json()["nodes"][0]
                     assert view["sample"]["sequence"] == 3 and view["fresh"]

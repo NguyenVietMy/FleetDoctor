@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from deploy_lab import load_env
+from deploy_lab import filesystem_paths, load_env
 from lab import ROOT, addresses, aws, command, inventory
 
 
@@ -95,6 +95,13 @@ def delivery_report(samples: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def journal_bounds(samples: list[dict[str, Any]]) -> tuple[datetime, datetime]:
+    times = [datetime.fromisoformat(sample["observed_at"]) for sample in samples]
+    if not times or any(t.tzinfo is None for t in times):
+        raise ValueError("need timezone-aware observation timestamps")
+    return min(times) - timedelta(seconds=1), max(times) + timedelta(seconds=2)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -106,6 +113,7 @@ def main() -> None:
     values = inventory(args.inventory)
     public = addresses(args.profile, values)
     settings = load_env(args.env)
+    paths = filesystem_paths(settings)
     evidence: dict[str, Any] = {
         "environment": "AWS EC2 us-east-1",
         "started_at": datetime.now(UTC).isoformat(),
@@ -119,6 +127,7 @@ def main() -> None:
             path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted((ROOT / "src/fleetdoctor").glob("*.py"))
         },
+        "configured_filesystems": list(paths),
     }
     try:
         ids = sorted(item["id"] for item in values.values())
@@ -203,7 +212,9 @@ def main() -> None:
                     node["fresh"]
                     and not node["stale"]
                     and node["filesystems"]
-                    and node["filesystems"][0]["total_bytes"] is not None
+                    and {fs["mountpoint"] for fs in node["filesystems"]} == set(paths)
+                    and all(fs["block_usage_percent"] is not None for fs in node["filesystems"])
+                    and node["active_incident_count"] == 0
                     for node in nodes
                 )
                 evidence["observations"].append(nodes)
@@ -230,12 +241,18 @@ def main() -> None:
                     "StrictHostKeyChecking=accept-new",
                     f"ec2-user@{public[node]}",
                 ]
+                journal_start, journal_end = journal_bounds(samples)
+                evidence.setdefault("journal_windows", {})[node] = {
+                    "start": journal_start.isoformat(),
+                    "end": journal_end.isoformat(),
+                    "basis": "observed_sample_timestamps",
+                }
                 journal = command(
                     ssh
                     + [
                         "sudo journalctl -u fleetdoctor-agent --no-pager -o cat "
-                        f"--since '{window_start.strftime('%Y-%m-%d %H:%M:%S UTC')}' "
-                        f"--until '{(window_end + timedelta(seconds=1)).strftime('%Y-%m-%d %H:%M:%S UTC')}'"
+                        f"--since '{journal_start.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}' "
+                        f"--until '{journal_end.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}'"
                     ]
                 )
                 failures = [line for line in journal.splitlines() if "upload failed" in line]
@@ -283,6 +300,35 @@ def main() -> None:
                     } <= node_queries
                     evidence["node_dashboard_queries"] = sorted(node_queries)
             evidence["grafana"] = "both_dashboards_provisioned_units_verified"
+            reader_health = client.get(
+                "http://127.0.0.1:3000/api/datasources/uid/incidents/health",
+                auth=("admin", settings["GRAFANA_PASSWORD"]),
+            )
+            reader_health.raise_for_status()
+            assert reader_health.json()["status"] == "OK"
+            evidence["grafana_incident_datasource"] = reader_health.json()
+            incident_query = client.post(
+                "http://127.0.0.1:3000/api/ds/query",
+                auth=("admin", settings["GRAFANA_PASSWORD"]),
+                json={
+                    "queries": [
+                        {
+                            "refId": "A",
+                            "datasource": {
+                                "uid": "incidents",
+                                "type": "grafana-postgresql-datasource",
+                            },
+                            "format": "table",
+                            "rawSql": "SELECT node_id, resource, severity, status, opened_at, observed_at, resolved_at FROM incidents ORDER BY opened_at DESC,id DESC LIMIT 100",
+                        }
+                    ],
+                    "from": "now-1h",
+                    "to": "now",
+                },
+            )
+            incident_query.raise_for_status()
+            assert not incident_query.json()["results"]["A"].get("error")
+            evidence["grafana_incident_query"] = incident_query.json()
         evidence["public_port_checks"] = {}
         for port in (8000, 9090, 3000, 5432):
             with socket.socket() as port_probe:

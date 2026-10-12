@@ -27,7 +27,7 @@ def command(argv: list[str], *, timeout: int = 180, data: str | None = None) -> 
 
 def inventory(path: Path | None) -> dict[str, dict[str, str]]:
     raw = (
-        path.read_text(encoding="utf-8")
+        path.read_text(encoding="utf-8-sig")
         if path
         else command(["terraform", "-chdir=infra/aws", "output", "-json", "instances"])
     )

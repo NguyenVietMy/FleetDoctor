@@ -1,9 +1,9 @@
-name: Task 01 checks
+name: Task 01 and 02 checks
 on: [push, pull_request]
 jobs:
   filesystem-and-services:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -21,9 +21,12 @@ jobs:
       - run: terraform -chdir=infra/aws fmt -check
       - run: terraform -chdir=infra/aws init -backend=false -lockfile=readonly
       - run: terraform -chdir=infra/aws validate
-      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task01-integration.json
+      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task02-integration.json
+      - run: uv run python scripts/disk_helper_integration.py --output $RUNNER_TEMP/task02-disk-helper.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: task01-integration
-          path: ${{ runner.temp }}/task01-integration.json
+          name: task02-local-proofs
+          path: |
+            ${{ runner.temp }}/task02-integration.json
+            ${{ runner.temp }}/task02-disk-helper.json

@@ -14,6 +14,8 @@ from uuid import uuid4
 
 import httpx
 from create_env import create
+from integration_disk import PATH as DISK_PATH
+from integration_disk import prove
 
 from fleetdoctor.agent import make_sample
 from fleetdoctor.collection import from_statvfs
@@ -31,7 +33,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    project = "fd01-" + uuid4().hex[:10]
+    project = "fd02-" + uuid4().hex[:10]
     ports = (free_port(), free_port(), free_port())
     started = datetime.now(UTC)
     evidence: dict[str, Any] = {
@@ -49,7 +51,7 @@ def main() -> None:
     thread: threading.Thread | None = None
     with tempfile.TemporaryDirectory(prefix="fleetdoctor-integration-") as temp:
         env_file = Path(temp) / "test.env"
-        values = create(env_file, ports=ports)
+        values = create(env_file, ports=ports, disk=True)
         tokens: dict[str, str] = json.loads(values["FLEETDOCTOR_NODE_TOKENS"])
         base = [
             "docker",
@@ -117,7 +119,7 @@ def main() -> None:
                                 boots[node],
                                 sessions[node],
                                 sequence,
-                                [from_statvfs("/", counters)],
+                                [from_statvfs("/", counters), from_statvfs(DISK_PATH, counters)],
                             )
                             try:
                                 response = client.post(
@@ -178,6 +180,8 @@ def main() -> None:
             for dashboard in dashboards.values():
                 assert dashboard["dashboard"]["refresh"] == "5s"
                 for panel in dashboard["dashboard"]["panels"]:
+                    if panel["datasource"]["uid"] != "prometheus":
+                        continue
                     expr = panel["targets"][0]["expr"]
                     unit = panel["fieldConfig"]["defaults"]["unit"]
                     assert unit == (
@@ -196,6 +200,7 @@ def main() -> None:
                 target["expr"]
                 for panel in dashboards["node"]["dashboard"]["panels"]
                 for target in panel["targets"]
+                if "expr" in target
             }
             assert {
                 'fleetdoctor_node_stale{node="$node"}',
@@ -254,9 +259,13 @@ def main() -> None:
                 timeout=4,
                 trust_env=False,
             ).json()
-            assert len(old_history["data"]["result"]) == 2
+            assert len(old_history["data"]["result"]) == 4
             evidence["prometheus_persistence"] = True
             assert not producer_errors, producer_errors
+            pause.set()
+            time.sleep(2)
+            evidence["disk_incidents"] = {}
+            prove(api, grafana, values, compose, evidence["disk_incidents"])
             evidence["status"] = "passed"
         except BaseException as exc:
             evidence["status"] = "failed"

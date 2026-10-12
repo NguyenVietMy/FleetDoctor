@@ -12,6 +12,12 @@ services:
       FLEETDOCTOR_NODE_TOKENS: ${FLEETDOCTOR_NODE_TOKENS:?set per-node token JSON}
       FLEETDOCTOR_FILESYSTEMS: ${FLEETDOCTOR_FILESYSTEMS:-/}
       PROMETHEUS_URL: http://prometheus:9090
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set database password}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?run scripts/upgrade_env.py privately}
+      FLEETDOCTOR_DISK_RULE: ${FLEETDOCTOR_DISK_RULE:-{}}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - ${COLLECTOR_BIND_IP:-127.0.0.1}:${COLLECTOR_PORT:-8000}:8000
     healthcheck:
@@ -54,6 +60,10 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?run scripts/upgrade_env.py privately}
+    depends_on:
+      collector:
+        condition: service_healthy
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro

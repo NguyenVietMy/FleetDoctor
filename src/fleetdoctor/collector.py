@@ -1,21 +1,27 @@
-"""Single-worker, in-memory collection; durable checkpoints arrive in task 04."""
+"""Single-worker collection with transactional incidents; sample checkpoints are task 04."""
 
 import asyncio
 import hmac
 import json
 import os
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
+from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from prometheus_client import CollectorRegistry, Gauge, generate_latest
 from pydantic import SecretStr, ValidationError
 
 from fleetdoctor.history import HISTORY_METRICS, HistoryClient, validate_range
+from fleetdoctor.incidents import DiskConfig
+from fleetdoctor.rules import DiskEvaluator
 from fleetdoctor.schema import FIELDS, Sample
+from fleetdoctor.store import IncidentStore, PostgresStore, StoreError
 
 MAX_BODY = 65536
 METRICS = {
@@ -32,13 +38,20 @@ METRICS = {
 
 class State:
     def __init__(
-        self, nodes: dict[str, SecretStr], paths: tuple[str, ...], clock: Callable[[], datetime]
+        self,
+        nodes: dict[str, SecretStr],
+        paths: tuple[str, ...],
+        clock: Callable[[], datetime],
+        store: IncidentStore,
+        config: DiskConfig,
     ) -> None:
         self.nodes, self.paths, self.clock = nodes, paths, clock
         self.latest: dict[str, Sample] = {}
         self.rejected: dict[str, str] = {}
         self.retired: dict[str, list[tuple[str, str]]] = {node: [] for node in nodes}
         self.lock = Lock()
+        self.store, self.config = store, config
+        self.evaluator = DiskEvaluator(store.active())
 
     def accept(self, sample: Sample) -> str:
         with self.lock:
@@ -56,15 +69,29 @@ class State:
                     return "duplicate" if sample.sequence == previous.sequence else "superseded"
                 if sample.observed_at <= previous.observed_at:
                     return "superseded"
-                if identity != prev_identity:
-                    self.retired[sample.node_id].append(prev_identity)
-                    self.retired[sample.node_id] = self.retired[sample.node_id][-8:]
+            staged = deepcopy(self.evaluator)
+            # A failed COMMIT response may still have durably changed incidents.
+            # Reconcile that outcome before this observation, without advancing windows,
+            # latest samples or deduplication until its own transaction succeeds.
+            active = self.store.active()
+            staged.active = {(i.node_id, i.resource): i for i in active}
+            staged.reloaded.intersection_update(i.id for i in active)
+            changes = staged.evaluate(sample, previous, self.clock(), self.config)
+            self.store.apply(changes)
+            # Every eligible batch passes storage before latest, dedup, identity or windows advance.
+            if previous and identity != prev_identity:
+                self.retired[sample.node_id].append(prev_identity)
+                self.retired[sample.node_id] = self.retired[sample.node_id][-8:]
+            self.evaluator = staged
             self.latest[sample.node_id] = sample
             self.rejected.pop(sample.node_id, None)
             return "accepted"
 
-    def view(self, node: str) -> dict[str, Any]:
+    def view(self, node: str, *, include_counts: bool = True) -> dict[str, Any]:
         with self.lock:
+            # Counts describe committed rows, including a lost write acknowledgement.
+            # Metrics can still expose collection/storage status when storage is down.
+            active = self.store.active() if include_counts else None
             sample = self.latest.get(node)
             age = (self.clock() - sample.observed_at).total_seconds() if sample else None
             fresh = age is not None and -2 <= age <= 10
@@ -74,8 +101,20 @@ class State:
                 "age_seconds": max(0, age) if age is not None else None,
                 "stale": age is None or age > 15 or age < -2,
                 "fresh": fresh,
-                "active_incident_count": None,
-                "diagnosis_coverage": "not_implemented_task01",
+                "active_incident_count": sum(i.node_id == node for i in active)
+                if active is not None
+                else None,
+                "diagnosis_coverage": {
+                    path: "available"
+                    if fresh
+                    and sample
+                    and any(
+                        fs.mountpoint == path and fs.block_usage_percent is not None
+                        for fs in sample.filesystems
+                    )
+                    else "unavailable"
+                    for path in self.paths
+                },
                 "delivery_error": self.rejected.get(node),
                 "coverage": {
                     fs.mountpoint: {
@@ -104,19 +143,40 @@ def create_app(
     paths: tuple[str, ...] = ("/",),
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     history: HistoryClient | None = None,
+    store: IncidentStore | None = None,
+    config: DiskConfig | None = None,
 ) -> FastAPI:
     if not nodes or len(nodes) > 16 or any(len(v.get_secret_value()) < 32 for v in nodes.values()):
         raise ValueError("configure 1..16 node tokens of at least 32 characters")
     if not paths or len(paths) > 8 or len(set(paths)) != len(paths):
         raise ValueError("configure 1..8 unique filesystems")
-    state = State(nodes, paths, clock)
+    storage = store if store is not None else PostgresStore.environment()
+    state = State(nodes, paths, clock, storage, config or DiskConfig())
     app = FastAPI(title="FleetDoctor", version="0.1.0")
     app.state.fleet = state
     upstream = history or HistoryClient(os.getenv("PROMETHEUS_URL", "http://prometheus:9090"))
 
+    @app.exception_handler(StoreError)
+    async def storage_error(request: Request, exc: StoreError) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": "incident storage unavailable"})
+
+    def require_storage() -> None:
+        if not storage.health():
+            raise StoreError("incident storage unavailable")
+
+    @app.get("/configuration")
+    def configuration() -> dict[str, Any]:
+        require_storage()
+        return {
+            "disk_rule": state.config.model_dump(),
+            "filesystems": list(paths),
+            "cadence_seconds": 5,
+        }
+
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "storage": "latest_memory_only", "slice": "01"}
+        require_storage()
+        return {"status": "ok", "storage": "incidents_durable_samples_memory", "slice": "02"}
 
     @app.post("/ingest")
     async def ingest(request: Request) -> dict[str, Any]:
@@ -146,11 +206,53 @@ def create_app(
             raise HTTPException(403, "node identity not authorized")
         if {fs.mountpoint for fs in sample.filesystems} != set(paths):
             raise HTTPException(422, "sample must cover exactly the configured filesystems")
-        return {"status": state.accept(sample), "durable": False}
+        return {
+            "status": await asyncio.to_thread(state.accept, sample),
+            "durable": False,
+            "incidents_durable": True,
+        }
 
     @app.get("/nodes")
     def list_nodes() -> dict[str, Any]:
+        require_storage()
         return {"nodes": [state.view(node) for node in nodes]}
+
+    @app.get("/diagnoses")
+    def diagnoses(
+        node: str | None = None,
+        rule: str | None = None,
+        status: str | None = Query(None, pattern="^(active|resolved)$"),
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = Query(25, ge=1, le=100),
+        offset: int = Query(0, ge=0, le=10000),
+    ) -> dict[str, Any]:
+        if any(t is not None and (t.tzinfo is None or t.utcoffset() is None) for t in (start, end)):
+            raise HTTPException(422, "opening time filters must include timezone")
+        if start and end and start > end:
+            raise HTTPException(422, "start must not exceed end")
+        rows, total = storage.query(node, rule, status, start, end, limit, offset)
+        with state.lock:
+            records = [
+                i.view(clock(), detail=False, reloaded=i.id in state.evaluator.reloaded)
+                for i in rows
+            ]
+        return {
+            "diagnoses": records,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "next_offset": offset + limit if offset + limit < total else None,
+            "time_filter": "opened_at",
+        }
+
+    @app.get("/diagnoses/{identifier}")
+    def diagnosis(identifier: UUID) -> dict[str, Any]:
+        record = storage.get(identifier)
+        if record is None:
+            raise HTTPException(404, "unknown incident")
+        with state.lock:
+            return record.view(clock(), detail=True, reloaded=record.id in state.evaluator.reloaded)
 
     @app.get("/nodes/{node}/metrics")
     async def node_metrics(
@@ -163,6 +265,7 @@ def create_app(
         if node not in nodes:
             raise HTTPException(404, "unknown node")
         if start is None and end is None:
+            require_storage()
             return state.view(node)
         if start is None or end is None or field not in HISTORY_METRICS:
             raise HTTPException(422, "supply valid field, start and end together")
@@ -183,6 +286,17 @@ def create_app(
             "fleetdoctor_collector_up", "Collector is serving requests", registry=registry
         )
         health_g.set(1)
+        storage_ok = storage.health()
+        storage_g = Gauge(
+            "fleetdoctor_incident_storage_up", "Required storage readiness", registry=registry
+        )
+        storage_g.set(int(storage_ok))
+        active_g = Gauge(
+            "fleetdoctor_active_incidents",
+            "Active disk incidents",
+            ["node", "rule"],
+            registry=registry,
+        )
         stale = Gauge(
             "fleetdoctor_node_stale",
             "Last eligible observation older than 15s or absent",
@@ -210,8 +324,15 @@ def create_app(
             )
             for field, suffix in METRICS.items()
         }
-        for node in nodes:
-            view = state.view(node)
+        try:
+            views = {node: state.view(node, include_counts=storage_ok) for node in nodes}
+        except StoreError:
+            storage_ok = False
+            views = {node: state.view(node, include_counts=False) for node in nodes}
+        storage_g.set(int(storage_ok))
+        for node, view in views.items():
+            if storage_ok:
+                active_g.labels(node, "disk_block_exhaustion").set(view["active_incident_count"])
             stale.labels(node).set(int(view["stale"]))
             if view["age_seconds"] is not None:
                 age_g.labels(node).set(view["age_seconds"])
@@ -239,4 +360,5 @@ def app_factory() -> FastAPI:
     return create_app(
         {node: SecretStr(token) for node, token in raw.items()},
         tuple(os.getenv("FLEETDOCTOR_FILESYSTEMS", "/").split(",")),
+        config=DiskConfig.model_validate_json(os.getenv("FLEETDOCTOR_DISK_RULE", "{}")),
     )

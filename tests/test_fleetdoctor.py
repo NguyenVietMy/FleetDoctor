@@ -18,6 +18,7 @@ from fleetdoctor.collection import CollectionWorker, from_statvfs
 from fleetdoctor.collector import create_app
 from fleetdoctor.history import HistoryClient, validate_range
 from fleetdoctor.schema import Filesystem, Sample
+from fleetdoctor.store import FixtureStore
 
 FIXTURES: dict[str, Any] = json.loads((Path(__file__).parent / "fixtures/statvfs.json").read_text())
 NOW = datetime.now(UTC)
@@ -72,7 +73,7 @@ def test_bad_filesystem_preserves_good_sibling() -> None:
         ],
         NOW,
     )
-    app = create_app(TOKENS, ("/", "/bad"), clock=lambda: NOW)
+    app = create_app(TOKENS, ("/", "/bad"), store=FixtureStore(), clock=lambda: NOW)
     with TestClient(app) as client:
         assert post(client, s).json()["status"] == "accepted"
         view = client.get("/nodes/node-a/metrics").json()
@@ -115,7 +116,7 @@ def test_bad_counters_rejected(field: str, value: Any) -> None:
 
 
 def test_identity_authentication_and_payload_caps() -> None:
-    with TestClient(create_app(TOKENS, clock=lambda: NOW)) as client:
+    with TestClient(create_app(TOKENS, store=FixtureStore(), clock=lambda: NOW)) as client:
         value = sample("node-b")
         assert (
             client.post(
@@ -142,7 +143,7 @@ def test_identity_authentication_and_payload_caps() -> None:
 
 
 def test_extreme_counter_cannot_break_prometheus_export() -> None:
-    with TestClient(create_app(TOKENS, clock=lambda: NOW)) as client:
+    with TestClient(create_app(TOKENS, store=FixtureStore(), clock=lambda: NOW)) as client:
         assert post(client, sample()).status_code == 200
         malicious = sample().model_dump(mode="json")
         malicious["filesystems"][0]["total_bytes"] = 10**400
@@ -166,7 +167,7 @@ def test_ingestion_freshness_boundaries(
     age: float, accepted: bool, fresh: bool, stale: bool
 ) -> None:
     value = sample().model_copy(update={"observed_at": NOW - timedelta(seconds=age)})
-    with TestClient(create_app(TOKENS, clock=lambda: NOW)) as client:
+    with TestClient(create_app(TOKENS, store=FixtureStore(), clock=lambda: NOW)) as client:
         assert (post(client, value).json()["status"] == "accepted") is accepted
         view = client.get("/nodes/node-a/metrics").json()
         assert view["fresh"] is fresh and view["stale"] is stale
@@ -174,7 +175,7 @@ def test_ingestion_freshness_boundaries(
 
 def test_export_and_latest_expire_before_stale() -> None:
     current = [NOW]
-    with TestClient(create_app(TOKENS, clock=lambda: current[0])) as client:
+    with TestClient(create_app(TOKENS, store=FixtureStore(), clock=lambda: current[0])) as client:
         post(client, sample())
         assert (
             'fleetdoctor_filesystem_available_bytes{filesystem="/",node="node-a"} 1.4336e+06'
@@ -195,7 +196,7 @@ def test_export_and_latest_expire_before_stale() -> None:
 
 def test_duplicate_superseded_and_session_restart() -> None:
     current = [NOW]
-    with TestClient(create_app(TOKENS, clock=lambda: current[0])) as client:
+    with TestClient(create_app(TOKENS, store=FixtureStore(), clock=lambda: current[0])) as client:
         value = sample()
         assert post(client, value).json()["status"] == "accepted"
         assert post(client, value).json()["status"] == "duplicate"
@@ -212,7 +213,9 @@ def test_duplicate_superseded_and_session_restart() -> None:
             update={"sequence": 9, "observed_at": current[0] + timedelta(seconds=1)}
         )
         assert post(client, old_session).json()["status"] == "superseded"
-    with TestClient(create_app(TOKENS, clock=lambda: current[0])) as restarted:
+    with TestClient(
+        create_app(TOKENS, store=FixtureStore(), clock=lambda: current[0])
+    ) as restarted:
         assert restarted.get("/nodes/node-a/metrics").json()["stale"]
 
 
@@ -238,6 +241,7 @@ def test_history_bounds_and_unavailable_upstream() -> None:
     with TestClient(
         create_app(
             TOKENS,
+            store=FixtureStore(),
             clock=lambda: NOW,
             history=HistoryClient("http://test", httpx.MockTransport(handler)),
         )

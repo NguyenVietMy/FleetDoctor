@@ -1,13 +1,298 @@
 {
-  "uid": "fleetdoctor-node", "title": "FleetDoctor · Node", "schemaVersion": 40,
-  "version": 1, "refresh": "5s", "timezone": "utc", "time": {"from": "now-15m", "to": "now"},
-  "templating": {"list": [{"name": "node", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(fleetdoctor_node_stale,node)", "refresh": 1, "includeAll": false, "multi": false}]},
+  "uid": "fleetdoctor-node",
+  "title": "FleetDoctor \u00b7 Node",
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "5s",
+  "timezone": "utc",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "node",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": "label_values(fleetdoctor_node_stale,node)",
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "status",
+        "type": "custom",
+        "query": "active,resolved",
+        "current": {
+          "text": "active",
+          "value": "active"
+        },
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false
+      }
+    ]
+  },
   "panels": [
-    {"id": 1, "title": "Workload block usage", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "targets": [{"expr": "fleetdoctor_filesystem_block_usage_ratio{node=\"$node\"}", "legendFormat": "{{filesystem}}", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}},
-    {"id": 2, "title": "Used and available bytes", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}, "targets": [{"expr": "fleetdoctor_filesystem_used_bytes{node=\"$node\"}", "refId": "A", "legendFormat": "used {{filesystem}}"}, {"expr": "fleetdoctor_filesystem_available_bytes{node=\"$node\"}", "refId": "B", "legendFormat": "available {{filesystem}}"}], "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}},
-    {"id": 3, "title": "Inode usage", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "targets": [{"expr": "fleetdoctor_filesystem_inode_usage_ratio{node=\"$node\"}", "refId": "A", "legendFormat": "{{filesystem}}"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}},
-    {"id": 4, "title": "Observation age", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "targets": [{"expr": "fleetdoctor_sample_age_seconds{node=\"$node\"}", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}},
-    {"id": 5, "title": "Stale node", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}, "targets": [{"expr": "fleetdoctor_node_stale{node=\"$node\"}", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "short", "min": 0, "max": 1}, "overrides": []}},
-    {"id": 6, "title": "Filesystem coverage", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}, "targets": [{"expr": "fleetdoctor_filesystem_coverage_ratio{node=\"$node\"}", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}}
+    {
+      "id": 1,
+      "title": "Workload block usage",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "fleetdoctor_filesystem_block_usage_ratio{node=\"$node\"}",
+          "legendFormat": "{{filesystem}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Used and available bytes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "fleetdoctor_filesystem_used_bytes{node=\"$node\"}",
+          "refId": "A",
+          "legendFormat": "used {{filesystem}}"
+        },
+        {
+          "expr": "fleetdoctor_filesystem_available_bytes{node=\"$node\"}",
+          "refId": "B",
+          "legendFormat": "available {{filesystem}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "Inode usage",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "fleetdoctor_filesystem_inode_usage_ratio{node=\"$node\"}",
+          "refId": "A",
+          "legendFormat": "{{filesystem}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Observation age",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "fleetdoctor_sample_age_seconds{node=\"$node\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Stale node",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "fleetdoctor_node_stale{node=\"$node\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Filesystem coverage",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "fleetdoctor_filesystem_coverage_ratio{node=\"$node\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 20,
+      "title": "Disk incident lifecycle",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "incidents"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT id::text, node_id, resource, rule, severity, status, opened_at, observed_at, updated_at, resolved_at, (evidence_reloaded OR now()-observed_at > interval '15 seconds' OR observed_at-now() > interval '2 seconds') AS evidence_stale, (record->'latest_evidence'->>'block_available')::boolean AS evidence_available FROM incidents WHERE status ~ '${status:raw}' AND node_id = ${node:sqlstring} ORDER BY opened_at DESC,id DESC LIMIT 100",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "cellOptions": {
+              "type": "auto"
+            },
+            "wrapText": true,
+            "inspect": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "lg"
+      }
+    },
+    {
+      "id": 21,
+      "title": "Disk evidence and investigation steps",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "incidents"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT id::text, node_id, resource, status, record->>'diagnosis' AS diagnosis, jsonb_pretty(record->'configuration') AS configuration, jsonb_pretty(record->'opening_evidence') AS opening_evidence, jsonb_pretty(record->'latest_evidence') AS latest_evidence, jsonb_pretty(record->'investigation_steps') AS investigation_steps FROM incidents WHERE status ~ '${status:raw}' AND node_id = ${node:sqlstring} ORDER BY opened_at DESC,id DESC LIMIT 25",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "cellOptions": {
+              "type": "auto"
+            },
+            "wrapText": true,
+            "inspect": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "lg"
+      }
+    }
   ]
 }

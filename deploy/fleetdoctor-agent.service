@@ -2,6 +2,8 @@
 Description=FleetDoctor host filesystem agent
 Wants=network-online.target
 After=network-online.target
+Requires=fleetdoctor-disk-prepare.service
+After=fleetdoctor-disk-prepare.service
 
 [Service]
 Type=simple
@@ -9,6 +11,7 @@ User=fleetdoctor
 EnvironmentFile=/etc/fleetdoctor/agent.env
 LoadCredential=ingest-token:/etc/fleetdoctor/ingest-token
 ExecStart=/opt/fleetdoctor/venv/bin/fleetdoctor-agent
+ExecStartPre=/bin/sh /opt/fleetdoctor/current/deploy/check-agent-mount.sh
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

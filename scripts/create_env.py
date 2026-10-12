@@ -6,15 +6,22 @@ import os
 import secrets
 from pathlib import Path
 
+from upgrade_env import DISK_PATH
+
 
 def create(
-    path: Path, collector_ip: str = "127.0.0.1", ports: tuple[int, int, int] = (8000, 9090, 3000)
+    path: Path,
+    collector_ip: str = "127.0.0.1",
+    ports: tuple[int, int, int] = (8000, 9090, 3000),
+    disk: bool = False,
 ) -> dict[str, str]:
     tokens = {node: secrets.token_urlsafe(32) for node in ("node-a", "node-b")}
     values = {
         "FLEETDOCTOR_NODE_TOKENS": json.dumps(tokens, separators=(",", ":")),
         "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
         "GRAFANA_PASSWORD": secrets.token_urlsafe(32),
+        "GRAFANA_DB_PASSWORD": secrets.token_urlsafe(32),
+        "FLEETDOCTOR_FILESYSTEMS": "/," + DISK_PATH if disk else "/",
         "COLLECTOR_BIND_IP": collector_ip,
         "COLLECTOR_PORT": str(ports[0]),
         "PROMETHEUS_PORT": str(ports[1]),
@@ -31,6 +38,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("path", type=Path)
     parser.add_argument("--collector-ip", default="127.0.0.1")
+    parser.add_argument("--disk", action="store_true")
     args = parser.parse_args()
-    create(args.path, args.collector_ip)
+    create(args.path, args.collector_ip, disk=args.disk)
     print(f"Created {args.path}; contains secrets, keep outside source control.")

@@ -1,0 +1,12 @@
+[Unit]
+Description=Prepare FleetDoctor owned bounded loop mount
+Before=fleetdoctor-agent.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/fleetdoctor/agent.env
+ExecCondition=/bin/sh -c 'case ",$FLEETDOCTOR_FILESYSTEMS," in *,/var/lib/fleetdoctor/chaos/disk,*) exit 0;; *) exit 1;; esac'
+ExecStart=/usr/bin/python3.11 /opt/fleetdoctor/current/deploy/disk_resource.py prepare
+TimeoutStartSec=60
+RemainAfterExit=yes

@@ -1,7 +1,9 @@
 """A single long-lived spawned worker bounds potentially blocking statvfs calls."""
 
+import json
 import multiprocessing as mp
 import os
+import re
 import time
 from collections.abc import Callable
 from multiprocessing.connection import Connection
@@ -10,6 +12,50 @@ from typing import Any
 from pydantic import ValidationError
 
 from fleetdoctor.schema import Filesystem
+
+DISK_PATH = "/var/lib/fleetdoctor/chaos/disk"
+
+
+def required_mount_identity(path: str) -> str | None:
+    """The lab path must remain a separate ext4 loop mount, never underlying root."""
+    if path != DISK_PATH:
+        return None
+    fd = os.open("/var/lib/fleetdoctor/chaos/identity.json", os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "r", encoding="utf-8") as identity_file:
+        stat = os.fstat(identity_file.fileno())
+        if stat.st_uid != 0 or stat.st_mode & 0o022:
+            raise ValueError("untrusted dedicated mount identity")
+        expected = json.load(identity_file)
+    with open("/proc/self/mountinfo", encoding="utf-8") as stream:
+        for line in stream:
+            fields = line.split()
+            if fields[4] == path:
+                filesystem, source, _ = line.split(" - ", 1)[1].split()
+                if filesystem == "ext4" and re.fullmatch(r"/dev/loop\d+", source):
+                    if (
+                        expected["source"] == source
+                        and expected["maj:min"] == fields[2]
+                        and expected["f_fsid"] == os.statvfs(path).f_fsid
+                    ):
+                        return line
+    raise ValueError("required dedicated mount unavailable")
+
+
+def collect_filesystem(path: str) -> Filesystem:
+    try:
+        identity = required_mount_identity(path)
+        stat = os.statvfs(path)
+        if identity != required_mount_identity(path):
+            raise ValueError("mount changed during observation")
+        return from_statvfs(
+            path,
+            {
+                key: int(getattr(stat, key))
+                for key in ("f_frsize", "f_blocks", "f_bfree", "f_bavail", "f_files", "f_ffree")
+            },
+        )
+    except (OSError, ValueError, KeyError, TypeError, ValidationError) as exc:
+        return Filesystem(mountpoint=path, errors=[f"statvfs_{type(exc).__name__}"])
 
 
 def from_statvfs(path: str, values: dict[str, int]) -> Filesystem:
@@ -55,15 +101,7 @@ def _worker(conn: Connection) -> None:
         conn.send("ready")
         while True:
             path = conn.recv()
-            try:
-                stat = os.statvfs(path)
-                values = {
-                    key: int(getattr(stat, key))
-                    for key in ("f_frsize", "f_blocks", "f_bfree", "f_bavail", "f_files", "f_ffree")
-                }
-                fs = from_statvfs(path, values)
-            except (OSError, ValueError, ValidationError) as exc:
-                fs = Filesystem(mountpoint=path, errors=[f"statvfs_{type(exc).__name__}"])
+            fs = collect_filesystem(path)
             conn.send(fs.model_dump())
     except (EOFError, BrokenPipeError):
         pass

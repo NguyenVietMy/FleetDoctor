@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["pydantic>=2.14,<3", "httpx>=0.28,<0.29"]
 
 [project.optional-dependencies]
-collector = ["fastapi>=0.143,<0.144", "uvicorn>=0.54,<0.55", "prometheus-client>=0.26,<0.27"]
+collector = ["fastapi>=0.143,<0.144", "uvicorn>=0.54,<0.55", "prometheus-client>=0.26,<0.27", "psycopg[binary]>=3.2,<4"]
 dev = ["pytest>=9.1,<10", "ruff>=0.17,<0.18", "mypy>=2.4,<3", "pyyaml>=6,<7", "types-PyYAML"]
 
 [project.scripts]
@@ -32,8 +32,8 @@ ignore = ["E501"]
 python_version = "3.11"
 platform = "linux"
 strict = true
-mypy_path = "src"
+mypy_path = ["src", "deploy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["scripts"]
+pythonpath = ["scripts", "deploy"]

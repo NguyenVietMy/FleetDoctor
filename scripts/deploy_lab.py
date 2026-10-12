@@ -4,12 +4,21 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import tarfile
 import tempfile
 from pathlib import Path
 
 from lab import ROOT, addresses, command, inventory
+from upgrade_env import DISK_PATH
+
+
+def filesystem_paths(settings: dict[str, str]) -> tuple[str, ...]:
+    paths = tuple(settings.get("FLEETDOCTOR_FILESYSTEMS", "/").split(","))
+    if paths not in (("/",), ("/", DISK_PATH)):
+        raise ValueError("lab deployment supports root plus the verified dedicated disk only")
+    return paths
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -31,6 +40,9 @@ def main() -> None:
     values = inventory(args.inventory)
     public = addresses(args.profile, values)
     settings = load_env(args.env)
+    paths = filesystem_paths(settings)
+    if len(settings.get("GRAFANA_DB_PASSWORD", "")) < 32:
+        raise ValueError("run scripts/upgrade_env.py privately before deployment")
     if settings.get("COLLECTOR_BIND_IP") != values["monitor"]["private_ip"]:
         raise ValueError("env COLLECTOR_BIND_IP must equal monitor private IP")
     tokens: dict[str, str] = json.loads(settings["FLEETDOCTOR_NODE_TOKENS"])
@@ -76,6 +88,7 @@ def main() -> None:
                 )
             for name in (wheel.name, "wheel.sha256", "requirements.txt"):
                 tar.add(stage / name, arcname=name)
+        prepared: dict[str, tuple[str, list[str], str]] = {}
         for role, host in public.items():
             target = f"ec2-user@{host}"
             prefix = [
@@ -107,6 +120,22 @@ def main() -> None:
                     target + ":" + remote_stage + "/release.tgz",
                 ]
             )
+            prepared[role] = target, prefix, remote_stage
+            command(
+                prefix
+                + [
+                    f"sudo mkdir -p /opt/fleetdoctor/current && sudo tar -xzf {remote_stage}/release.tgz -C /opt/fleetdoctor/current"
+                ]
+            )
+            if role != "monitor" and DISK_PATH in paths:
+                command(
+                    prefix
+                    + [
+                        "sudo python3.11 /opt/fleetdoctor/current/deploy/disk_resource.py prepare >/dev/null"
+                    ],
+                    timeout=60,
+                )
+        for role, (target, prefix, remote_stage) in prepared.items():
             if role == "monitor":
                 secret = stage / "monitor.env"
                 shutil.copyfile(args.env, secret)
@@ -133,7 +162,7 @@ def main() -> None:
             else:
                 node_env = stage / f"{role}.env"
                 node_env.write_text(
-                    f"FLEETDOCTOR_NODE_ID={role}\nFLEETDOCTOR_COLLECTOR_URL=http://{values['monitor']['private_ip']}:8000\nFLEETDOCTOR_FILESYSTEMS=/\n",
+                    f"FLEETDOCTOR_NODE_ID={role}\nFLEETDOCTOR_COLLECTOR_URL=http://{values['monitor']['private_ip']}:8000\nFLEETDOCTOR_FILESYSTEMS={','.join(paths)}\n",
                     encoding="utf-8",
                     newline="\n",
                 )
@@ -159,9 +188,21 @@ def main() -> None:
                 command(
                     prefix
                     + [
-                        f"sudo mkdir -p /opt/fleetdoctor/current && sudo tar -xzf {remote_stage}/release.tgz -C /opt/fleetdoctor/current && sudo bash /opt/fleetdoctor/current/deploy/install-agent.sh {remote_stage}/agent.env {remote_stage}/token"
+                        f"sudo mkdir -p /opt/fleetdoctor/current && sudo tar -xzf {remote_stage}/release.tgz -C /opt/fleetdoctor/current && "
+                        + (
+                            "sudo python3.11 /opt/fleetdoctor/current/deploy/disk_resource.py prepare >/dev/null && "
+                            if DISK_PATH in paths
+                            else ""
+                        )
+                        + f"sudo bash /opt/fleetdoctor/current/deploy/install-agent.sh {remote_stage}/agent.env {remote_stage}/token"
                     ],
                     timeout=240,
+                )
+                command(
+                    prefix
+                    + [
+                        f"sudo grep -Fx {shlex.quote('FLEETDOCTOR_FILESYSTEMS=' + ','.join(paths))} /etc/fleetdoctor/agent.env >/dev/null && systemctl is-active --quiet fleetdoctor-agent"
+                    ]
                 )
             command(prefix + [f"rm {remote_stage}/release.tgz && rmdir {remote_stage}"])
             print(f"Deployed {role} (secrets redacted).")

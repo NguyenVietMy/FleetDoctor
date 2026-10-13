@@ -63,7 +63,11 @@
         "defaults": {
           "unit": "percentunit",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "custom": {
+            "spanNulls": false,
+            "insertNulls": false
+          }
         },
         "overrides": []
       }
@@ -96,7 +100,11 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes"
+          "unit": "bytes",
+          "custom": {
+            "spanNulls": false,
+            "insertNulls": false
+          }
         },
         "overrides": []
       }
@@ -126,7 +134,11 @@
         "defaults": {
           "unit": "percentunit",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "custom": {
+            "spanNulls": false,
+            "insertNulls": false
+          }
         },
         "overrides": []
       }
@@ -153,7 +165,11 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "s",
+          "custom": {
+            "spanNulls": false,
+            "insertNulls": false
+          }
         },
         "overrides": []
       }
@@ -182,7 +198,11 @@
         "defaults": {
           "unit": "short",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "custom": {
+            "spanNulls": false,
+            "insertNulls": false
+          }
         },
         "overrides": []
       }
@@ -211,7 +231,11 @@
         "defaults": {
           "unit": "percentunit",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "custom": {
+            "spanNulls": false,
+            "insertNulls": false
+          }
         },
         "overrides": []
       }
@@ -292,6 +316,120 @@
       "options": {
         "showHeader": true,
         "cellHeight": "lg"
+      }
+    },
+    {
+      "id": 22,
+      "title": "Observed local discards (agent session gauge)",
+      "description": "Last observed reporting, scoped to boot/agent session; may reset. Consult age/stale. Missing discards remain unavailable. Discards do not prove network loss.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "fleetdoctor_delivery_discard_total{node=\"$node\"}",
+          "refId": "A",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": false,
+            "insertNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "title": "Delivery reporting available (absent is unavailable)",
+      "description": "Last observed reporting, scoped to boot/agent session; may reset. Consult age/stale. Missing discards remain unavailable. Discards do not prove network loss.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "fleetdoctor_delivery_reporting_available{node=\"$node\"}",
+          "refId": "A",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": false,
+            "insertNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "title": "Delivery observation age",
+      "description": "Last observed reporting, scoped to boot/agent session; may reset. Consult age/stale. Missing discards remain unavailable. Discards do not prove network loss.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "fleetdoctor_sample_age_seconds{node=\"$node\"}",
+          "refId": "A",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": false,
+            "insertNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        }
       }
     }
   ]

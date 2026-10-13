@@ -1,9 +1,11 @@
 """Single-worker collection with transactional incidents; sample checkpoints are task 04."""
 
 import asyncio
+import hashlib
 import hmac
 import json
 import os
+from collections import OrderedDict
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -49,16 +51,26 @@ class State:
         self.latest: dict[str, Sample] = {}
         self.rejected: dict[str, str] = {}
         self.retired: dict[str, list[tuple[str, str]]] = {node: [] for node in nodes}
+        self.identities: dict[str, OrderedDict[tuple[str, str, int], bytes]] = {
+            node: OrderedDict() for node in nodes
+        }
         self.lock = Lock()
         self.store, self.config = store, config
         self.evaluator = DiskEvaluator(store.active())
 
     def accept(self, sample: Sample) -> str:
         with self.lock:
-            age = (self.clock() - sample.observed_at).total_seconds()
+            now = self.clock()
+            age = (now - sample.observed_at).total_seconds()
             if age < -2 or age > 10:
                 self.rejected[sample.node_id] = "clock_skew" if age < -2 else "late_observation"
                 return "ineligible"
+            key = (str(sample.boot_id), str(sample.agent_session_id), sample.sequence)
+            fingerprint = hashlib.sha256(sample.model_dump_json().encode()).digest()
+            known = self.identities[sample.node_id].get(key)
+            if known is not None:
+                if known != fingerprint:
+                    raise HTTPException(409, "conflicting sample identity")
             previous = self.latest.get(sample.node_id)
             identity = (str(sample.boot_id), str(sample.agent_session_id))
             if identity in self.retired[sample.node_id]:
@@ -66,7 +78,11 @@ class State:
             if previous:
                 prev_identity = (str(previous.boot_id), str(previous.agent_session_id))
                 if identity == prev_identity and sample.sequence <= previous.sequence:
-                    return "duplicate" if sample.sequence == previous.sequence else "superseded"
+                    if sample.sequence == previous.sequence:
+                        if sample != previous:
+                            raise HTTPException(409, "conflicting sample identity")
+                        return "duplicate"
+                    return "superseded"
                 if sample.observed_at <= previous.observed_at:
                     return "superseded"
             staged = deepcopy(self.evaluator)
@@ -76,7 +92,7 @@ class State:
             active = self.store.active()
             staged.active = {(i.node_id, i.resource): i for i in active}
             staged.reloaded.intersection_update(i.id for i in active)
-            changes = staged.evaluate(sample, previous, self.clock(), self.config)
+            changes = staged.evaluate(sample, previous, now, self.config)
             self.store.apply(changes)
             # Every eligible batch passes storage before latest, dedup, identity or windows advance.
             if previous and identity != prev_identity:
@@ -84,6 +100,10 @@ class State:
                 self.retired[sample.node_id] = self.retired[sample.node_id][-8:]
             self.evaluator = staged
             self.latest[sample.node_id] = sample
+            identities = self.identities[sample.node_id]
+            identities[key] = fingerprint
+            if len(identities) > 60:
+                identities.popitem(last=False)
             self.rejected.pop(sample.node_id, None)
             return "accepted"
 
@@ -116,6 +136,15 @@ class State:
                     for path in self.paths
                 },
                 "delivery_error": self.rejected.get(node),
+                "delivery": {
+                    "available": bool(sample and sample.delivery is not None),
+                    "scope": "agent_session",
+                    "discard_total": sample.delivery.discard_total
+                    if sample and sample.delivery
+                    else None,
+                    "age_seconds": max(0, age) if age is not None else None,
+                    "fresh": fresh,
+                },
                 "coverage": {
                     fs.mountpoint: {
                         "available_fields": [f for f in FIELDS if getattr(fs, f) is not None]
@@ -176,7 +205,7 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         require_storage()
-        return {"status": "ok", "storage": "incidents_durable_samples_memory", "slice": "02"}
+        return {"status": "ok", "storage": "incidents_durable_samples_memory", "slice": "03"}
 
     @app.post("/ingest")
     async def ingest(request: Request) -> dict[str, Any]:
@@ -309,6 +338,18 @@ def create_app(
             ["node"],
             registry=registry,
         )
+        reporting = Gauge(
+            "fleetdoctor_delivery_reporting_available",
+            "Last sample contains session delivery reporting",
+            ["node"],
+            registry=registry,
+        )
+        discards = Gauge(
+            "fleetdoctor_delivery_discard_total",
+            "Last observed session cumulative local discards (gauge)",
+            ["node"],
+            registry=registry,
+        )
         coverage = Gauge(
             "fleetdoctor_filesystem_coverage_ratio",
             "Fraction of available filesystem fields; zero if not fresh",
@@ -333,6 +374,9 @@ def create_app(
         for node, view in views.items():
             if storage_ok:
                 active_g.labels(node, "disk_block_exhaustion").set(view["active_incident_count"])
+            reporting.labels(node).set(int(view["delivery"]["available"]))
+            if view["delivery"]["available"]:
+                discards.labels(node).set(view["delivery"]["discard_total"])
             stale.labels(node).set(int(view["stale"]))
             if view["age_seconds"] is not None:
                 age_g.labels(node).set(view["age_seconds"])

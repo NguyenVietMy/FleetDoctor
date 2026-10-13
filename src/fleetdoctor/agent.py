@@ -1,4 +1,4 @@
-"""Unprivileged host agent. Outage queue/replay support belongs to task 03."""
+"""Unprivileged host agent with independent collection and bounded delivery."""
 
 import argparse
 import asyncio
@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -14,6 +15,7 @@ import httpx
 from pydantic import SecretStr
 
 from fleetdoctor.collection import CollectionWorker
+from fleetdoctor.delivery import DeliveryQueue, Outcome, send, uploader
 from fleetdoctor.schema import UNITS, Filesystem, Sample
 
 LOG = logging.getLogger(__name__)
@@ -41,25 +43,8 @@ def make_sample(
 
 async def upload(
     client: httpx.AsyncClient, url: str, token: SecretStr, sample: Sample, deadline: float = 2.0
-) -> None:
-    async def request() -> None:
-        async with client.stream(
-            "POST",
-            url + "/ingest",
-            content=sample.model_dump_json(),
-            headers={
-                "Authorization": "Bearer " + token.get_secret_value(),
-                "Content-Type": "application/json",
-            },
-        ) as response:
-            response.raise_for_status()
-            size = 0
-            async for chunk in response.aiter_bytes():
-                size += len(chunk)
-                if size > 16384:
-                    raise ValueError("ingest response too large")
-
-    await asyncio.wait_for(request(), timeout=deadline)
+) -> Outcome:
+    return await send(client, url, token, sample.model_dump_json().encode("utf-8"), deadline)
 
 
 def next_tick(scheduled: float, now: float, interval: float = 5.0) -> float:
@@ -75,35 +60,67 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stopped.set)
-    tick = time.monotonic()
-    sequence = 0
     try:
-        # A five-second upload period must not reuse a connection at Uvicorn's
-        # five-second idle cutoff. Expire our idle sockets well before that edge.
-        async with httpx.AsyncClient(
-            timeout=2,
-            follow_redirects=False,
-            trust_env=False,
-            limits=httpx.Limits(keepalive_expiry=2),
-        ) as client:
+        await collect_loop(node, boot, session, worker, url, token, paths, once, stopped)
+    finally:
+        worker.close()
+
+
+async def collect_loop(
+    node: str,
+    boot: UUID,
+    session: UUID,
+    worker: CollectionWorker,
+    url: str,
+    token: SecretStr,
+    paths: tuple[str, ...],
+    once: bool,
+    stopped: asyncio.Event,
+) -> None:
+    """Also used by the service proof with an ordinary synthetic collection worker."""
+    sequence = 0
+    queue = DeliveryQueue()
+    async with httpx.AsyncClient(
+        timeout=2,
+        follow_redirects=False,
+        trust_env=False,
+        limits=httpx.Limits(max_connections=1, max_keepalive_connections=1, keepalive_expiry=2),
+    ) as client:
+        tick = time.monotonic()
+        upload_task = None if once else asyncio.create_task(uploader(queue, client, url, token))
+        try:
             while not stopped.is_set():
                 observed_at = datetime.now(UTC)
-                filesystems = worker.collect(paths)
-                sample = make_sample(node, boot, session, sequence, filesystems, observed_at)
+                collection = asyncio.create_task(asyncio.to_thread(worker.collect, paths))
                 try:
-                    await upload(client, url, token, sample)
-                except (httpx.HTTPError, TimeoutError, ValueError) as exc:
-                    LOG.warning("upload failed: %s (sequence %d)", type(exc).__name__, sequence)
-                sequence += 1
+                    filesystems = await asyncio.shield(collection)
+                except asyncio.CancelledError:
+                    # The worker cannot be closed concurrently with its outstanding call.
+                    await collection
+                    raise
+                sample = make_sample(node, boot, session, sequence, filesystems, observed_at)
+                queue.enqueue(sample, datetime.now(UTC))
                 if once:
-                    break
+                    entry = queue.select(datetime.now(UTC))
+                    if entry is not None:
+                        try:
+                            result = await send(client, url, token, entry.body)
+                        except (httpx.HTTPError, TimeoutError, ValueError) as exc:
+                            LOG.warning("upload failed: %s", type(exc).__name__)
+                            result = "retry"
+                        queue.complete(entry, result, datetime.now(UTC))
+                    return
+                sequence += 1
                 tick = next_tick(tick, time.monotonic())
                 try:
                     await asyncio.wait_for(stopped.wait(), timeout=max(0, tick - time.monotonic()))
                 except TimeoutError:
                     pass
-    finally:
-        worker.close()
+        finally:
+            if upload_task is not None:
+                upload_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await upload_task
 
 
 def main() -> None:

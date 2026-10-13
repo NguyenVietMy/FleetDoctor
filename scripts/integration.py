@@ -1,6 +1,7 @@
 """Run isolated services with two fixture producers; never claim AWS host evidence."""
 
 import argparse
+import asyncio
 import json
 import socket
 import subprocess
@@ -13,9 +14,11 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
+from chaos_harness import source_manifest
 from create_env import create
 from integration_disk import PATH as DISK_PATH
 from integration_disk import prove
+from integration_outage import prove_outage
 
 from fleetdoctor.agent import make_sample
 from fleetdoctor.collection import from_statvfs
@@ -33,7 +36,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    project = "fd02-" + uuid4().hex[:10]
+    project = "fd03-" + uuid4().hex[:10]
     ports = (free_port(), free_port(), free_port())
     started = datetime.now(UTC)
     evidence: dict[str, Any] = {
@@ -45,6 +48,7 @@ def main() -> None:
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
     }
+    evidence["source_before"] = source_manifest()
     stop = threading.Event()
     pause = threading.Event()
     producer_errors: list[str] = []
@@ -266,6 +270,12 @@ def main() -> None:
             time.sleep(2)
             evidence["disk_incidents"] = {}
             prove(api, grafana, values, compose, evidence["disk_incidents"])
+            evidence["outage_and_replay"] = {}
+            asyncio.run(prove_outage(api, prom, grafana, values, evidence["outage_and_replay"]))
+            evidence["source_after"] = source_manifest()
+            assert evidence["source_before"] == evidence["source_after"], (
+                "source changed during service proof"
+            )
             evidence["status"] = "passed"
         except BaseException as exc:
             evidence["status"] = "failed"

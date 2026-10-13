@@ -96,6 +96,10 @@ class Filesystem(WireModel):
         return self
 
 
+class Delivery(WireModel):
+    discard_total: Count
+
+
 class Sample(WireModel):
     schema_version: Literal[1]
     node_id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
@@ -105,6 +109,7 @@ class Sample(WireModel):
     observed_at: datetime
     units: dict[str, str]
     filesystems: list[Filesystem] = Field(min_length=1, max_length=8)
+    delivery: Delivery | None = None
 
     @field_validator("observed_at")
     @classmethod

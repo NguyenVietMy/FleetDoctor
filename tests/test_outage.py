@@ -21,7 +21,10 @@ def test_delivery_publication_compatibility_conflict_and_failed_commit() -> None
     assert rig.post(third).status_code == 503
     view = rig.client.get("/nodes/node-a/metrics").json()
     assert not view["delivery"]["available"] and view["delivery"]["discard_total"] is None
-    assert rig.post(third).json()["status"] == "accepted"
+    assert rig.post(third).json()["status"] == "duplicate"
+    assert not rig.client.get("/nodes/node-a/metrics").json()["delivery"]["available"]
+    fresh = rig.sample(98).model_copy(update={"delivery": Delivery(discard_total=10)})
+    assert rig.post(fresh).json()["status"] == "accepted"
     assert rig.client.get("/nodes/node-a/metrics").json()["delivery"]["discard_total"] == 10
     metrics = rig.client.get("/metrics").text
     assert 'fleetdoctor_delivery_discard_total{node="node-a"} 10.0' in metrics
@@ -88,6 +91,9 @@ def test_retirement_eviction_and_nonincreasing_time_cannot_revive() -> None:
     for _ in range(61):
         rig.now += timedelta(microseconds=1)
         rig.send(98, gap=0)
+    checkpoint = rig.store.snapshot({"node-a"}).checkpoints["node-a"]
+    assert len(checkpoint.fingerprints) == 60
+    assert len(checkpoint.retired_sessions) == 8
     assert rig.post(oldest).json()["status"] == "superseded"
     previous = rig.app.state.fleet.latest["node-a"]
     assert (

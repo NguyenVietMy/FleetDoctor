@@ -7,11 +7,12 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
 from fleetdoctor.agent import make_sample
+from fleetdoctor.checkpoint import Checkpoint
 from fleetdoctor.collection import from_statvfs
 from fleetdoctor.collector import create_app
 from fleetdoctor.incidents import DiskConfig, Incident
 from fleetdoctor.schema import Filesystem, Sample
-from fleetdoctor.store import FixtureStore, StoreError
+from fleetdoctor.store import FixtureStore, StoreError, StoreSnapshot
 
 TOKENS = {"node-a": SecretStr("a" * 40), "node-b": SecretStr("b" * 40)}
 PATH = "/var/lib/fleetdoctor/chaos/disk"
@@ -73,7 +74,7 @@ class LostAcknowledgementStore(FixtureStore):
 
     lose_next_commit = False
 
-    def apply(self, changes: list[Incident]) -> None:
+    def commit(self, changes: list[Incident], checkpoint: Checkpoint) -> None:
         for change in changes:
             if change.status == "active" and any(
                 old.status == "active"
@@ -83,8 +84,8 @@ class LostAcknowledgementStore(FixtureStore):
                 for old in self.records.values()
             ):
                 raise StoreError("incident_one_active")
-        super().apply(changes)
-        if changes and self.lose_next_commit:
+        super().commit(changes, checkpoint)
+        if self.lose_next_commit:
             self.lose_next_commit = False
             raise StoreError("COMMIT succeeded; acknowledgement lost")
 
@@ -112,11 +113,10 @@ def test_committed_opening_survives_lost_acknowledgement(next_observation: str) 
         rig.app.state.fleet.config = DiskConfig(trigger_percent=99, severity="warning")
     if next_observation in ("same", "new_config"):
         rig.now += timedelta(seconds=1)
-        assert rig.post(failed).json()["status"] == "accepted"
         assert rig.post(failed).json()["status"] == "duplicate"
     elif next_observation == "newer_high":
         rig.send(98)
-        assert rig.post(failed).json()["status"] == "superseded"
+        assert rig.post(failed).json()["status"] == "duplicate"
     healthy_count = 0
     if next_observation == "newer_low":
         rig.send(80)
@@ -158,12 +158,11 @@ def test_committed_resolution_retry_preserves_original_resolution_and_recurrence
     high_count = 0
     rig.now += timedelta(seconds=1)
     if next_observation == "same":
-        assert rig.post(failed).json()["status"] == "accepted"
         assert rig.post(failed).json()["status"] == "duplicate"
     else:
         rig.send(98)
         high_count = 1
-        assert rig.post(failed).json()["status"] == "superseded"
+        assert rig.post(failed).json()["status"] == "duplicate"
     retried = rig.client.get("/diagnoses/" + opening["id"]).json()
     assert retried["resolved_at"] == committed["resolved_at"]
     assert retried["opening_evidence"] == committed["opening_evidence"]
@@ -183,6 +182,11 @@ def test_count_read_failure_omits_all_counts_without_hiding_storage_failure() ->
                 raise StoreError("read failed after health probe")
             return super().active()
 
+        def snapshot(self, nodes: set[str]) -> StoreSnapshot:
+            if self.unavailable:
+                raise StoreError("read failed after health probe")
+            return super().snapshot(nodes)
+
     store = UnavailableReadStore()
     rig = Rig(store)
     for _ in range(3):
@@ -198,7 +202,7 @@ def test_count_read_failure_omits_all_counts_without_hiding_storage_failure() ->
     assert rig.app.state.fleet.latest["node-a"] == previous
 
 
-def test_unknown_resolution_clears_reload_marker_on_identical_retry() -> None:
+def test_unknown_resolution_keeps_reload_marker_on_identical_retry() -> None:
     store = LostAcknowledgementStore()
     rig = Rig(store)
     rig.app.state.fleet.config = DiskConfig(consecutive_samples=1)
@@ -211,9 +215,9 @@ def test_unknown_resolution_clears_reload_marker_on_identical_retry() -> None:
     store.lose_next_commit = True
     assert rig.post(failed).status_code == 503
     assert rig.client.get("/nodes").json()["nodes"][0]["active_incident_count"] == 0
-    assert rig.post(failed).json()["status"] == "accepted"
+    assert rig.post(failed).json()["status"] == "duplicate"
     detail = rig.client.get("/diagnoses/" + identifier).json()
-    assert detail["status"] == "resolved" and detail["evidence_fresh"]
+    assert detail["status"] == "resolved" and detail["evidence_stale"]
 
 
 def test_lifecycle_evidence_hysteresis_recurrence_and_independent_nodes() -> None:

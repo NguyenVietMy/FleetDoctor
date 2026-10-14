@@ -203,7 +203,7 @@ def test_duplicate_superseded_and_session_restart() -> None:
         current[0] += timedelta(seconds=5)
         newer = value.model_copy(update={"sequence": 1, "observed_at": current[0]})
         assert post(client, newer).json()["status"] == "accepted"
-        assert post(client, value).json()["status"] == "superseded"
+        assert post(client, value).json()["status"] == "duplicate"
         current[0] += timedelta(seconds=5)
         restart = newer.model_copy(
             update={"sequence": 0, "agent_session_id": uuid4(), "observed_at": current[0]}

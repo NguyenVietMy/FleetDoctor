@@ -21,6 +21,8 @@ MAX_BODY = 65_536
 MAX_RESPONSE = 16_384
 MAX_TOTAL = 2**64 - 1
 BACKOFF = (1, 2, 4, 5)
+ACKNOWLEDGEMENT_HEADER = "X-FleetDoctor-Acknowledgement"
+ACKNOWLEDGEMENT_VERSION = "checkpoints-v1"
 
 
 @dataclass(frozen=True)
@@ -99,23 +101,29 @@ class DeliveryQueue:
         self.prune(now)
 
 
-def acknowledgement(body: bytes, sent: bytes) -> Outcome:
+def acknowledgement(body: bytes, sent: bytes, *, negotiation_requested: bool = False) -> Outcome:
     try:
         value = json.loads(body)
     except RecursionError as exc:
         raise ValueError("ingest acknowledgement nesting exceeds parser limit") from exc
-    if not isinstance(value, dict) or set(value) - {
-        "status",
-        "durable",
-        "incidents_durable",
-        "identity",
-    }:
+    if not isinstance(value, dict):
+        raise ValueError("invalid acknowledgement shape")
+    keys = set(value)
+    legacy = {"status", "durable", "incidents_durable"}
+    negotiated = legacy | {"checkpoint_durable", "identity"}
+    if keys not in (legacy, legacy | {"identity"}) and not (
+        negotiation_requested and keys == negotiated
+    ):
         raise ValueError("invalid acknowledgement shape")
     status = value.get("status")
     if status not in ("accepted", "duplicate", "superseded", "ineligible"):
         raise ValueError("unknown acknowledgement status")
     if value.get("durable") is not False or value.get("incidents_durable") is not True:
         raise ValueError("invalid durability acknowledgement")
+    if keys == negotiated and value.get("checkpoint_durable") is not (
+        status in ("accepted", "duplicate")
+    ):
+        raise ValueError("inconsistent checkpoint durability acknowledgement")
     if "identity" in value:
         sample = json.loads(sent)
         expected = {
@@ -143,6 +151,7 @@ async def send(
             headers={
                 "Authorization": "Bearer " + token.get_secret_value(),
                 "Content-Type": "application/json",
+                ACKNOWLEDGEMENT_HEADER: ACKNOWLEDGEMENT_VERSION,
             },
         ) as response:
             if response.status_code in (408, 429) or response.status_code >= 500:
@@ -157,7 +166,7 @@ async def send(
                 if len(content) + len(chunk) > MAX_RESPONSE:
                     raise ValueError("ingest response too large")
                 content.extend(chunk)
-            return acknowledgement(bytes(content), body)
+            return acknowledgement(bytes(content), body, negotiation_requested=True)
 
     return await asyncio.wait_for(request(), timeout=deadline)
 

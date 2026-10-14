@@ -1,8 +1,12 @@
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import lab
 import pytest
 from deploy_lab import filesystem_paths, load_env
 from healthy_demo import delivery_report, journal_bounds
@@ -71,6 +75,150 @@ def test_public_addresses_come_from_current_aws_response() -> None:
     response["Reservations"][0]["Instances"][0].pop("PublicIpAddress")
     with pytest.raises(ValueError):
         current_addresses(response, {"i-abc", "i-def"})
+
+
+def configure_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inventory_values: dict[str, dict[str, str]],
+    script: bytes,
+) -> tuple[Path, Path]:
+    root = tmp_path / "repo"
+    (root / "deploy").mkdir(parents=True)
+    (root / "deploy/export-monitor.sh").write_bytes(script)
+    output = tmp_path / "backup"
+    monkeypatch.setattr(lab, "ROOT", root)
+    monkeypatch.setattr(lab, "inventory", lambda path: inventory_values)
+    monkeypatch.setattr(
+        lab,
+        "addresses",
+        lambda profile, values: {
+            "monitor": "203.0.113.1",
+            "node-a": "203.0.113.2",
+            "node-b": "203.0.113.3",
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "lab.py",
+            "export",
+            "--inventory",
+            str(tmp_path / "instances.json"),
+            "--key",
+            str(tmp_path / "key"),
+            "--output",
+            str(output),
+        ],
+    )
+    return root, output
+
+
+def test_export_rejects_crlf_local_script_before_any_export_side_effect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inventory_values: dict[str, dict[str, str]],
+) -> None:
+    _, output = configure_export(
+        tmp_path,
+        monkeypatch,
+        inventory_values,
+        b"#!/bin/bash\r\nset -euo pipefail\r\n",
+    )
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("export side effect reached before local script validation")
+
+    monkeypatch.setattr(lab, "addresses", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    with pytest.raises(ValueError, match="LF line endings"):
+        lab.main()
+    assert not output.exists()
+
+
+def test_export_streams_exact_local_script_and_deletes_remote_only_after_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inventory_values: dict[str, dict[str, str]],
+) -> None:
+    script = b"#!/bin/bash\nset -euo pipefail\ncd /opt/fleetdoctor/current\n"
+    _, output = configure_export(tmp_path, monkeypatch, inventory_values, script)
+    actions: list[str] = []
+
+    def fake_run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        remote = argv[-1]
+        if "pg_dump" in remote:
+            actions.append("pg_dump")
+            assert kwargs["timeout"] == 90
+            return SimpleNamespace(returncode=0, stdout=b"private sql\n", stderr=b"")
+        if remote == "sudo bash -s":
+            actions.append("local_script_stdin")
+            assert kwargs["input"] == script
+            assert kwargs["timeout"] == 180
+            assert kwargs["capture_output"] is True
+            assert kwargs["text"] is False
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        if argv[0] == "scp":
+            actions.append("local_archive_copy")
+            Path(argv[-1]).write_bytes(b"private stores\n")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if remote == "rm -f /tmp/fleetdoctor-stores.tgz":
+            assert (output / "stores.tgz").read_bytes() == b"private stores\n"
+            actions.append("remote_archive_delete")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected subprocess: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    lab.main()
+    assert actions == [
+        "pg_dump",
+        "local_script_stdin",
+        "local_archive_copy",
+        "remote_archive_delete",
+    ]
+    assert (output / "postgres.sql").read_bytes() == b"private sql\n"
+    assert (output / "stores.tgz").read_bytes() == b"private stores\n"
+    assert json.loads((output / "instances.json").read_text(encoding="utf-8")) == inventory_values
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout"])
+def test_export_script_failure_is_bounded_redacted_and_preserves_remote_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inventory_values: dict[str, dict[str, str]],
+    failure: str,
+) -> None:
+    script = b"#!/bin/bash\nset -euo pipefail\n"
+    _, output = configure_export(tmp_path, monkeypatch, inventory_values, script)
+    actions: list[str] = []
+
+    def fake_run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        remote = argv[-1]
+        if "pg_dump" in remote:
+            actions.append("pg_dump")
+            return SimpleNamespace(returncode=0, stdout=b"private sql\n", stderr=b"")
+        if remote == "sudo bash -s":
+            actions.append("local_script_stdin")
+            assert kwargs["input"] == script
+            assert kwargs["timeout"] == 180
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(
+                    argv, kwargs["timeout"], output=b"PRIVATE STDOUT", stderr=b"PRIVATE STDERR"
+                )
+            return SimpleNamespace(
+                returncode=23, stdout=b"PRIVATE STDOUT", stderr=b"PRIVATE STDERR"
+            )
+        actions.append("unexpected_after_failure")
+        raise AssertionError("copy or deletion ran after export script failure")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises((RuntimeError, TimeoutError)) as failure_info:
+        lab.main()
+    assert "PRIVATE" not in str(failure_info.value)
+    assert actions == ["pg_dump", "local_script_stdin"]
+    assert (output / "postgres.sql").read_bytes() == b"private sql\n"
+    assert not (output / "stores.tgz").exists()
 
 
 def delivery_samples(sequences: list[int], interval: int = 5) -> list[dict[str, Any]]:

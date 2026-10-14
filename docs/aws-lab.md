@@ -23,15 +23,15 @@ State remains local and untracked. Preserve it privately; it is needed to clean 
 
 ## Deploy and view
 
-Generate secrets with the **monitor's private IP** from Terraform output, then deploy:
+Generate secrets with the **monitor's private IP** from Terraform output. For a Task04 run, an independent coordinator first freezes the approved checkout with `audit.py freeze`; that JSON binds the repository, baseline, HEAD, tree, plan hash, changed-file inventory, every inventoried file hash, diff hash and aggregate hash. Keep the freeze and all command outputs private and outside the checkout. Then deploy with the required source gate:
 
 ```text
 uv run python scripts/create_env.py <external-path>/lab.env --collector-ip <monitor-private-ip>
-uv run python scripts/deploy_lab.py --env <external-path>/lab.env
+uv run python scripts/deploy_lab.py --profile fleetdoctor --inventory <retained-inventory> --key <retained-key> --env <external-path>/lab.env --source-freeze <approved-source-freeze.json> --approved-plan-sha256 <approved-plan-sha256> --output <unique-deploy.json>
 uv run python scripts/lab.py show
 ```
 
-The deployer builds a local wheel, ships its SHA256 and an agent-only hash-checked dependency export, and forces wheel reinstallation without rebuilding on nodes. This replaces installed code even when the package version is unchanged. Agents run unprivileged under systemd with `LoadCredential` for per-node tokens and a root-owned environment file for nonsecret configuration. Monitor Compose reads a mode0600 `.env`. Deployer uses exact instance IDs to obtain **current public IPs** every time. Keep local secrets/exports private. Treat changed SSH host keys as a reason to verify the instance; the deployer never disables host-key checking.
+The deployer validates every file in the approved freeze before staging, again immediately before live activation, and at completion. A missing, unreviewed or changed file aborts before live effects when detected by the pre-stage gate. It builds a local wheel, ships its SHA256 and an agent-only hash-checked dependency export, and forces wheel reinstallation without rebuilding on nodes. Per-invocation private stage files use exact owned names and bounded cleanup in `finally`; cleanup failure is retained alongside the primary failure. This replaces installed code even when the package version is unchanged. Agents run unprivileged under systemd with `LoadCredential` for per-node tokens and a root-owned environment file for nonsecret configuration. Monitor Compose reads a mode0600 `.env`. Deployer uses exact account/inventory bindings and exact instance IDs to obtain **current public IPs** every time. Keep local secrets/exports private. Treat changed SSH host keys as a reason to verify the instance; the deployer never disables host-key checking.
 
 Run the `ssh -L ...` command printed by `lab.py show` in a visible terminal and leave it open. This tunnels localhost ports 3000/9090 and port8000 to the monitor's private bind address. Visit http://127.0.0.1:3000 and use `admin` plus your generated Grafana password. Fleet and Node dashboards refresh every five seconds. Check both nodes are fresh with readable filesystem coverage. Public-IP service requests should be denied by the security group and bind address.
 
@@ -40,6 +40,19 @@ uv run python scripts/healthy_demo.py --env <external-path>/lab.env --output <ex
 ```
 
 This polls both nodes once per second across a22-second window and requires at least four distinct consecutive observations in each stable agent session. It checks raw observed-time intervals of4.5-5.5s and zero upload-failure journal lines for the observed window. It also saves Prometheus history, Grafana provisioning/datasource/live queries, exact EC2 metadata/standard-credit settings, public service-port rejection and SSH-collected kernel/boot/cgroup/clock/systemd/Compose information. The shipped wheel, extracted source and modules imported by each deployed interpreter must match the local source. Agent import probes run outside the extracted archive and record the active service PID, start time and command line. The demo saves failures with partial evidence and uses separate HTTP connections through SSH. Read the output and visually inspect dashboards through the tunnel when a browser is available. Retain the source revision **and** uncommitted source snapshot until a commit is authorized; HEAD alone does not identify uncommitted code. This is a short healthy demo; the one-hour false-incident and measured overhead gate remains task 16. Investigate permissions, clocks, missing sources and stale observations; do not substitute fixture evidence.
+
+## Task04 collector restart proof
+
+Run only after the frozen source deployment and a fresh healthy preflight. The restart proof targets node-a's verified dedicated disk through the existing disk harness. It reserves a 240-second harness maximum, refuses callback admission unless at least 80 seconds remain, gives the restart callback one absolute 70-second deadline and bounds collector readiness to 45 seconds including time spent inside the successful health request. Normal ownership/status handoff consumes the allocated absolute budget but does not require a fresh 70 seconds. The harness retains ownership, watchdogs and cleanup; the callback restores the collector in its own `finally`. No production fault switch is installed.
+
+```text
+uv run python scripts/healthy_demo.py --profile fleetdoctor --inventory <retained-inventory> --key <retained-key> --env <retained-env> --output <unique-preflight.json>
+uv run python scripts/restart_demo.py --profile fleetdoctor --inventory <retained-inventory> --key <retained-key> --env <retained-env> --preflight <unique-preflight.json> --source-freeze <approved-source-freeze.json> --output <unique-aws-restart.json>
+uv run python scripts/healthy_demo.py --profile fleetdoctor --inventory <retained-inventory> --key <retained-key> --env <retained-env> --output <unique-postrun-healthy.json>
+uv run python scripts/lab.py export --profile fleetdoctor --inventory <retained-inventory> --key <retained-key> --output <new-postrun-backup-directory>
+```
+
+The proof requires three real eligible high observations before restart, captures the incident and paired checkpoint directly from PostgreSQL and through the API, restarts only the collector, and proves a new collector process identity. It then checks retained duplicate/conflict behavior, recurrence and resolution invariants, node-b continuity, provisioned Grafana datasource results, bounded checkpoint state, source binding and final healthy restoration. Read the structured output: a simulated client-side post-COMMIT error is labeled as simulation, while transaction rollback and the collector restart use the actual database/service boundaries. Rendered Grafana inspection remains a separate human gate.
 
 ## Start and stop between sessions
 

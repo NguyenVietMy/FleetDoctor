@@ -9,20 +9,52 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def command(argv: list[str], *, timeout: int = 180, data: str | None = None) -> str:
-    result = subprocess.run(
-        argv,
-        cwd=ROOT,
-        input=data,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
+def command(
+    argv: list[str],
+    *,
+    timeout: int = 180,
+    data: str | bytes | None = None,
+    redact_failure: bool = False,
+) -> str:
+    binary_input = isinstance(data, bytes)
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=ROOT,
+            input=data,
+            capture_output=True,
+            text=not binary_input,
+            encoding=None if binary_input else "utf-8",
+            errors=None if binary_input else "replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        if redact_failure:
+            raise TimeoutError(
+                f"command timed out after {timeout} seconds; private output omitted"
+            ) from None
+        raise
     if result.returncode:
-        raise RuntimeError(f"command failed ({result.returncode}): {result.stderr[-2000:]}")
-    return result.stdout
+        if redact_failure:
+            raise RuntimeError(f"command failed ({result.returncode}); private output omitted")
+        stderr = (
+            result.stderr.decode("utf-8", errors="replace")
+            if isinstance(result.stderr, bytes)
+            else result.stderr
+        )
+        raise RuntimeError(f"command failed ({result.returncode}): {stderr[-2000:]}")
+    return (
+        result.stdout.decode("utf-8", errors="replace")
+        if isinstance(result.stdout, bytes)
+        else result.stdout
+    )
+
+
+def validated_lf_shell(path: Path) -> bytes:
+    data = path.read_bytes()
+    if b"\r" in data or not data.endswith(b"\n"):
+        raise ValueError(f"{path} must use LF line endings and end with LF")
+    return data
 
 
 def inventory(path: Path | None) -> dict[str, dict[str, str]]:
@@ -75,6 +107,11 @@ def main() -> None:
     args = parser.parse_args()
     values = inventory(args.inventory)
     ids = sorted(item["id"] for item in values.values())
+    export_script: bytes | None = None
+    if args.action == "export":
+        if args.output is None:
+            parser.error("export requires --output <new local directory>")
+        export_script = validated_lf_shell(ROOT / "deploy/export-monitor.sh")
     if args.action == "stop":
         aws(args.profile, "ec2", "stop-instances", "--instance-ids", *ids)
         aws(args.profile, "ec2", "wait", "instance-stopped", "--instance-ids", *ids, timeout=600)
@@ -85,8 +122,7 @@ def main() -> None:
         aws(args.profile, "ec2", "wait", "instance-status-ok", "--instance-ids", *ids, timeout=600)
     public = addresses(args.profile, values)
     if args.action == "export":
-        if args.output is None:
-            parser.error("export requires --output <new local directory>")
+        assert args.output is not None and export_script is not None
         args.output.mkdir(parents=True, exist_ok=False)
         target = f"ec2-user@{public['monitor']}"
         ssh = ["ssh", "-i", str(args.key), "-o", "StrictHostKeyChecking=accept-new", target]
@@ -101,9 +137,16 @@ def main() -> None:
         )
         if dump.returncode:
             raise RuntimeError("PostgreSQL export failed")
+        if not dump.stdout:
+            raise RuntimeError("PostgreSQL export produced no data")
         (args.output / "postgres.sql").write_bytes(dump.stdout)
-        export_cmd = "cd /opt/fleetdoctor/current && sudo bash deploy/export-monitor.sh"
-        command(ssh + [export_cmd], timeout=180)
+        command(
+            ssh + ["sudo bash -s"],
+            timeout=180,
+            data=export_script,
+            redact_failure=True,
+        )
+        stores = args.output / "stores.tgz"
         command(
             [
                 "scp",
@@ -112,9 +155,11 @@ def main() -> None:
                 "-o",
                 "StrictHostKeyChecking=accept-new",
                 target + ":/tmp/fleetdoctor-stores.tgz",
-                str(args.output / "stores.tgz"),
+                str(stores),
             ]
         )
+        if not stores.is_file() or stores.stat().st_size == 0:
+            raise RuntimeError("monitor store export did not produce a nonempty local archive")
         # Keep the remote private-data copy only until the local download succeeds.
         command(ssh + ["rm -f /tmp/fleetdoctor-stores.tgz"])
         (args.output / "instances.json").write_text(json.dumps(values, indent=2), encoding="utf-8")

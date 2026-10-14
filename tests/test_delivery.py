@@ -121,6 +121,36 @@ def test_ack_old_collector_and_optional_identity() -> None:
         acknowledgement(json.dumps(value).encode(), body)
 
 
+def test_ack_negotiation_is_strict_with_legacy_fallback() -> None:
+    sent = sample(sequence=2**64 - 1).model_dump_json().encode()
+    data = json.loads(sent)
+    identity = {
+        key: data[key]
+        for key in ("node_id", "boot_id", "agent_session_id", "sequence", "observed_at")
+    }
+    negotiated = json.dumps(
+        {
+            "status": "accepted",
+            "durable": False,
+            "incidents_durable": True,
+            "checkpoint_durable": True,
+            "identity": identity,
+        }
+    ).encode()
+    assert acknowledgement(ack(), sent, negotiation_requested=True) == "accepted"
+    assert acknowledgement(negotiated, sent, negotiation_requested=True) == "accepted"
+    with pytest.raises(ValueError, match="shape"):
+        acknowledgement(negotiated, sent)
+    for edit in (
+        {"checkpoint_durable": False},
+        {"identity": identity | {"sequence": True}},
+        {"unexpected": 1},
+    ):
+        bad = json.loads(negotiated) | edit
+        with pytest.raises(ValueError):
+            acknowledgement(json.dumps(bad).encode(), sent, negotiation_requested=True)
+
+
 @pytest.mark.parametrize(
     "status,result",
     [
@@ -135,9 +165,11 @@ def test_ack_old_collector_and_optional_identity() -> None:
 )
 def test_http_outcomes(status: int, result: str) -> None:
     async def scenario() -> None:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(lambda _: httpx.Response(status, content=ack()))
-        ) as client:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.headers["X-FleetDoctor-Acknowledgement"] == "checkpoints-v1"
+            return httpx.Response(status, content=ack())
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             assert await send(client, "http://fixture", TOKEN, b"{}") == result
 
     asyncio.run(scenario())

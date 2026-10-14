@@ -12,6 +12,7 @@ import os
 import platform
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -242,15 +243,83 @@ def process_identity(pid: int) -> str:
     return Path(f"/proc/{pid}/stat").read_text().split(")", 1)[1].split()[19]
 
 
-def owned_pid(record: dict[str, Any]) -> bool:
+def boot_identity() -> str:
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+
+def owned_process(record: dict[str, Any], mode: str) -> bool:
     try:
-        pid = record["worker_pid"]
+        pid = record[mode + "_pid"]
+        started = record[mode + "_start"]
+        token = record["token"]
+        if (
+            type(pid) is not int
+            or pid <= 0
+            or not isinstance(started, str)
+            or not started.isdigit()
+            or not isinstance(token, str)
+        ):
+            return False
+        command_line = [
+            part for part in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if part
+        ]
         return (
-            process_identity(pid) == record["worker_start"]
-            and record["token"].encode() in Path(f"/proc/{pid}/cmdline").read_bytes()
+            process_identity(pid) == started
+            and mode.encode() in command_line
+            and token.encode() in command_line
         )
-    except (KeyError, FileNotFoundError, ProcessLookupError):
+    except (IndexError, KeyError, OSError, ProcessLookupError, TypeError, ValueError):
         return False
+
+
+def owned_pid(record: dict[str, Any]) -> bool:
+    return owned_process(record, "worker")
+
+
+def owned_regular(path: Path, expected_inode: object, label: str) -> int:
+    if type(expected_inode) is not int or expected_inode <= 0:
+        raise ValueError(label + " identity metadata invalid")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise ValueError(label + " unavailable") from exc
+    value = os.fstat(fd)
+    if value.st_uid != 0 or value.st_ino != expected_inode or not stat.S_ISREG(value.st_mode):
+        os.close(fd)
+        raise ValueError(label + " ownership identity changed")
+    return fd
+
+
+def status(token: str) -> dict[str, Any]:
+    record: dict[str, Any] = json.loads(run_path(token).read_text())
+    if record.get("token") != token:
+        raise ValueError("run token identity changed")
+    if record.get("cleanup_complete") is True:
+        return record
+    if record.get("cleanup_complete") is not False:
+        raise ValueError("active run completion metadata invalid")
+    resource = verify()
+    if record.get("boot_id") != boot_identity():
+        raise ValueError("active run boot identity changed")
+    if record.get("mapping") != resource.get("mapping"):
+        raise ValueError("active run mount identity changed")
+
+    lease_fd = owned_regular(LEASE, record.get("lease_inode"), "lease")
+    try:
+        with os.fdopen(lease_fd, encoding="utf-8") as stream:
+            lease = json.load(stream)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("lease metadata invalid") from exc
+    if not isinstance(lease, dict) or lease.get("token") != token:
+        raise ValueError("lease token identity changed")
+
+    filler = MOUNT / ("filler-" + token)
+    filler_fd = owned_regular(filler, record.get("filler_inode"), "filler")
+    os.close(filler_fd)
+    for mode in ("worker", "watchdog"):
+        if not owned_process(record, mode):
+            raise ValueError(mode + " process identity is not live")
+    return record
 
 
 def cleanup(token: str, *, reboot: bool = False) -> dict[str, Any]:
@@ -258,7 +327,7 @@ def cleanup(token: str, *, reboot: bool = False) -> dict[str, Any]:
     path = run_path(token)
     record: dict[str, Any] = json.loads(path.read_text())
     if reboot:
-        if record.get("boot_id") == Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+        if record.get("boot_id") == boot_identity():
             raise ValueError("reboot cleanup requires a prior boot run")
         if record["mapping"]["backing_file"] != mapping()["backing_file"]:
             raise ValueError("orphan backing identity changed")
@@ -326,8 +395,9 @@ def start(token: str, duration: int) -> dict[str, Any]:
         os.close(fd)
         record = {
             "token": token,
-            "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            "boot_id": boot_identity(),
             "mapping": resource["mapping"],
+            "lease_inode": lease_inode,
             "filler_inode": filler_inode,
             "max_duration_seconds": duration,
             "started_utc": datetime.now(UTC).isoformat(),
@@ -338,6 +408,7 @@ def start(token: str, duration: int) -> dict[str, Any]:
         watchdog = launch("watchdog", token, duration)
         launched.append(watchdog)
         record["watchdog_pid"] = watchdog.pid
+        record["watchdog_start"] = process_identity(watchdog.pid)
         save(path, record)
         worker = launch("worker", token, duration)
         launched.append(worker)
@@ -450,7 +521,7 @@ def main() -> None:
             if args.action == "start"
             else cleanup(args.token, reboot=args.action == "cleanup-reboot")
             if args.action in ("cleanup", "cleanup-reboot")
-            else json.loads(run_path(args.token).read_text())
+            else status(args.token)
         )
         print(json.dumps(result))
 

@@ -36,7 +36,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    project = "fd03-" + uuid4().hex[:10]
+    project = "fd04-" + uuid4().hex[:10]
     ports = (free_port(), free_port(), free_port())
     started = datetime.now(UTC)
     evidence: dict[str, Any] = {
@@ -99,8 +99,68 @@ def main() -> None:
 
         api, prom, grafana = (f"http://127.0.0.1:{port}" for port in ports)
         try:
+            migration_id = str(uuid4())
+            migration_time = datetime.now(UTC).isoformat()
+            migration_record = {
+                "id": migration_id,
+                "node_id": "migration-fixture",
+                "resource": "/",
+                "rule": "disk_block_exhaustion",
+                "status": "resolved",
+                "severity": "critical",
+                "diagnosis": "pre-Task04 migration fixture",
+                "configuration": {
+                    "trigger_percent": 95,
+                    "recovery_percent": 90,
+                    "consecutive_samples": 3,
+                    "max_gap_seconds": 10,
+                    "severity": "critical",
+                },
+                "opening_evidence": {"block_available": True},
+                "latest_evidence": {"block_available": True},
+                "opened_at": migration_time,
+                "observed_at": migration_time,
+                "evaluated_at": migration_time,
+                "updated_at": migration_time,
+                "resolved_at": migration_time,
+                "investigation_steps": ["migration fixture"],
+            }
+            record_json = json.dumps(migration_record, separators=(",", ":")).replace("'", "''")
+            compose("up", "-d", "--wait", "--wait-timeout", "90", "postgres")
+            compose(
+                "exec",
+                "-T",
+                "postgres",
+                "psql",
+                "-U",
+                "fleetdoctor",
+                "-d",
+                "fleetdoctor",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-c",
+                "CREATE TABLE incidents (id uuid PRIMARY KEY,node_id text NOT NULL,resource text NOT NULL,rule text NOT NULL,status text NOT NULL CHECK (status IN ('active','resolved')),severity text NOT NULL,opened_at timestamptz NOT NULL,observed_at timestamptz NOT NULL,updated_at timestamptz NOT NULL,resolved_at timestamptz,record jsonb NOT NULL);"
+                + f"INSERT INTO incidents VALUES ('{migration_id}','migration-fixture','/','disk_block_exhaustion','resolved','critical','{migration_time}','{migration_time}','{migration_time}','{migration_time}','{record_json}'::jsonb);",
+            )
             compose("up", "-d", "--build", "--wait", "--wait-timeout", "90")
             poll(api + "/health")
+            migration = compose(
+                "exec",
+                "-T",
+                "postgres",
+                "psql",
+                "-U",
+                "fleetdoctor",
+                "-d",
+                "fleetdoctor",
+                "-Atc",
+                f"SELECT id::text FROM incidents WHERE id='{migration_id}' AND to_regclass('public.ingestion_checkpoints') IS NOT NULL;",
+            ).strip()
+            assert migration == migration_id
+            evidence["pre_task04_schema_migration"] = {
+                "incident_id_preserved": migration_id,
+                "checkpoint_table_created": True,
+            }
             stat: dict[str, int] = json.loads((ROOT / "tests/fixtures/statvfs.json").read_text())[
                 "reserved"
             ]

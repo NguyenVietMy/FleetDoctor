@@ -11,7 +11,9 @@ from uuid import uuid4
 import httpx
 
 from fleetdoctor.agent import make_sample
+from fleetdoctor.checkpoint import MAX_CHECKPOINT_BYTES
 from fleetdoctor.collection import from_statvfs
+from fleetdoctor.collector import ACKNOWLEDGEMENT_HEADER, ACKNOWLEDGEMENT_VERSION
 from fleetdoctor.schema import Filesystem, Sample
 
 PATH = "/var/lib/fleetdoctor/chaos/disk"
@@ -72,7 +74,10 @@ def prove(
             return client.post(
                 api + "/ingest",
                 content=value.model_dump_json(),
-                headers={"Authorization": "Bearer " + tokens[value.node_id]},
+                headers={
+                    "Authorization": "Bearer " + tokens[value.node_id],
+                    ACKNOWLEDGEMENT_HEADER: ACKNOWLEDGEMENT_VERSION,
+                },
             )
 
         def send(usage: int | None, node: str = "node-a") -> Sample:
@@ -81,6 +86,11 @@ def prove(
             assert result.status_code == 200, result.text
             assert result.json()["status"] == "accepted" and result.json()["incidents_durable"]
             assert result.json()["durable"] is False
+            assert result.json()["checkpoint_durable"] is True
+            assert result.json()["identity"] == {
+                key: value.model_dump(mode="json")[key]
+                for key in ("node_id", "boot_id", "agent_session_id", "sequence", "observed_at")
+            }
             return value
 
         def sql_query(raw: str) -> dict[str, Any]:
@@ -147,7 +157,7 @@ def prove(
         finally:
             psql("ALTER TABLE incidents_temporarily_unavailable RENAME TO incidents")
         after = get("/nodes/node-a/metrics")["sample"]
-        assert after == before and get("/diagnoses")["total"] == 0
+        assert after == before and get("/diagnoses", node="node-a")["total"] == 0
         retried = post(failing)
         assert retried.json()["status"] == "accepted"
         assert post(failing).json()["status"] == "duplicate"
@@ -161,11 +171,51 @@ def prove(
             "unchanged_latest": True,
             "one_incident": identifier,
         }
-        send(99)
+        durable_sample = send(99)
         updated = get("/diagnoses/" + identifier)
         assert updated["opening_evidence"] == original["opening_evidence"]
         assert updated["latest_evidence"] != original["latest_evidence"]
         proof["opening_detail"] = original
+        latest_before_missing_row = get("/nodes/node-a/metrics")["sample"]
+        psql(
+            "DROP TABLE IF EXISTS ingestion_checkpoint_missing_probe; "
+            "CREATE TABLE ingestion_checkpoint_missing_probe AS "
+            "SELECT * FROM ingestion_checkpoints WHERE false; "
+            "INSERT INTO ingestion_checkpoint_missing_probe "
+            "SELECT * FROM ingestion_checkpoints WHERE node_id='node-a'; "
+            "DELETE FROM ingestion_checkpoints WHERE node_id='node-a'"
+        )
+        try:
+            assert (
+                psql("SELECT count(*) FROM ingestion_checkpoints WHERE node_id='node-a'").strip()
+                == "0"
+            )
+            missing_row_retry = post(durable_sample)
+            assert missing_row_retry.status_code == 503
+            assert missing_row_retry.json() == {"detail": "incident storage unavailable"}
+            assert "checkpoint_durable" not in missing_row_retry.text
+            assert get("/nodes/node-a/metrics")["sample"] == latest_before_missing_row
+            assert client.get(api + "/health").status_code == 200
+        finally:
+            psql(
+                "INSERT INTO ingestion_checkpoints "
+                "SELECT * FROM ingestion_checkpoint_missing_probe; "
+                "DROP TABLE ingestion_checkpoint_missing_probe"
+            )
+        recovered_missing_row = post(durable_sample)
+        assert recovered_missing_row.status_code == 200
+        assert recovered_missing_row.json()["status"] == "duplicate"
+        assert recovered_missing_row.json()["checkpoint_durable"] is True
+        proof["missing_published_checkpoint_row"] = {
+            "failed_status": missing_row_retry.status_code,
+            "failed_body": missing_row_retry.json(),
+            "unchanged_latest": True,
+            "storage_health_with_table_present": 200,
+            "restored_retry": recovered_missing_row.json(),
+        }
+        checkpoint_before = json.loads(
+            psql("SELECT record::text FROM ingestion_checkpoints WHERE node_id='node-a'")
+        )
         compose("up", "-d", "--force-recreate", "--no-deps", "collector")
         deadline = time.monotonic() + 30
         while True:
@@ -179,6 +229,11 @@ def prove(
         assert reloaded["evidence_stale"] and not reloaded["evidence_fresh"]
         assert reloaded["opening_evidence"] == original["opening_evidence"]
         proof["reload_detail_before_observation"] = reloaded
+        checkpoint_after = json.loads(
+            psql("SELECT record::text FROM ingestion_checkpoints WHERE node_id='node-a'")
+        )
+        assert checkpoint_after == checkpoint_before
+        proof["checkpoint_across_collector_restart"] = checkpoint_after
         stale_query = "SELECT evidence_reloaded, (evidence_reloaded OR now()-observed_at > interval '15 seconds' OR observed_at-now() > interval '2 seconds') AS evidence_stale, (now()-observed_at <= interval '15 seconds') AS age_under_15, (record->'latest_evidence'->>'block_available')::boolean AS evidence_available FROM incidents WHERE status='active'"
         reloaded_sql = sql_rows(stale_query)
         assert reloaded_sql[0]["evidence_reloaded"] and reloaded_sql[0]["evidence_stale"]
@@ -262,12 +317,20 @@ def prove(
         for _ in range(3):
             send(98)
         new = get("/diagnoses", status="active")["diagnoses"][0]
-        assert new["id"] != identifier and get("/diagnoses")["total"] == 2
+        assert new["id"] != identifier and get("/diagnoses", node="node-a")["total"] == 2
         proof["recurrence_id"] = new["id"]
         assert get("/diagnoses", node="node-b")["total"] == 0
         assert get("/diagnoses", node="node-a' OR 1=1 --")["total"] == 0
-        assert get("/diagnoses", rule="disk_block_exhaustion", status="resolved")["total"] == 1
-        pages = [get("/diagnoses", limit=1, offset=i) for i in range(2)]
+        assert (
+            get(
+                "/diagnoses",
+                node="node-a",
+                rule="disk_block_exhaustion",
+                status="resolved",
+            )["total"]
+            == 1
+        )
+        pages = [get("/diagnoses", node="node-a", limit=1, offset=i) for i in range(2)]
         assert [p["diagnoses"][0]["id"] for p in pages] == [new["id"], identifier]
         assert pages[0]["next_offset"] == 1 and pages[1]["next_offset"] is None
         assert (
@@ -296,9 +359,9 @@ def prove(
                     dashboard_proof[name + ":" + panel["title"]] = sql_query(raw)
         proof["actual_dashboard_queries"] = dashboard_proof
         privileges = psql(
-            "SELECT has_table_privilege('fleetdoctor_reader','incidents','SELECT'),has_table_privilege('fleetdoctor_reader','incidents','INSERT'),has_table_privilege('fleetdoctor_reader','incidents','UPDATE'),has_table_privilege('fleetdoctor_reader','incidents','DELETE')"
+            "SELECT has_table_privilege('fleetdoctor_reader','incidents','SELECT'),has_table_privilege('fleetdoctor_reader','incidents','INSERT'),has_table_privilege('fleetdoctor_reader','incidents','UPDATE'),has_table_privilege('fleetdoctor_reader','incidents','DELETE'),has_table_privilege('fleetdoctor_reader','ingestion_checkpoints','SELECT')"
         )
-        assert privileges.strip() == "t|f|f|f"
+        assert privileges.strip() == "t|f|f|f|f"
         # Test a real reader write, with read-only default explicitly disabled: ACL must still deny it.
         compose(
             "exec",
@@ -307,6 +370,14 @@ def prove(
             "/app/.venv/bin/python",
             "-c",
             "import os,psycopg; c=psycopg.connect(host='postgres',dbname='fleetdoctor',user='fleetdoctor_reader',password=os.environ['GRAFANA_DB_PASSWORD'],autocommit=True); c.execute('SET default_transaction_read_only=off');\ntry: c.execute(\"DELETE FROM incidents\")\nexcept psycopg.errors.InsufficientPrivilege: print('reader write denied by ACL')\nelse: raise AssertionError('reader can write')",
+        )
+        compose(
+            "exec",
+            "-T",
+            "collector",
+            "/app/.venv/bin/python",
+            "-c",
+            "import os,psycopg; c=psycopg.connect(host='postgres',dbname='fleetdoctor',user='fleetdoctor_reader',password=os.environ['GRAFANA_DB_PASSWORD'],autocommit=True); c.execute('SET default_transaction_read_only=off');\ntry: c.execute(\"SELECT * FROM ingestion_checkpoints\")\nexcept psycopg.errors.InsufficientPrivilege: print('checkpoint read denied by ACL')\nelse: raise AssertionError('reader can read checkpoints')",
         )
         proof["reader_acl"] = privileges.strip()
         # Age is derived from observation timestamp, independently of updated_at.
@@ -323,5 +394,73 @@ def prove(
         proof["committed_acknowledgement_reconciliation"] = json.loads(
             compose("exec", "-T", "collector", "/app/.venv/bin/python", "-c", probe)
         )
+        size_constraint = psql(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conrelid='ingestion_checkpoints'::regclass "
+            "AND conname='ingestion_checkpoint_record_size'"
+        ).strip()
+        revision_constraint = psql(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conrelid='ingestion_checkpoints'::regclass "
+            "AND conname='ingestion_checkpoint_revision'"
+        ).strip()
+        assert str(MAX_CHECKPOINT_BYTES) in size_constraint
+        assert revision_constraint
+        psql(
+            "DO $$ BEGIN BEGIN "
+            "INSERT INTO ingestion_checkpoints(node_id,revision,updated_at,record) "
+            "VALUES ('revision-probe',0,now(),'{}'::jsonb); "
+            "RAISE EXCEPTION 'zero checkpoint revision unexpectedly accepted'; "
+            "EXCEPTION WHEN check_violation THEN NULL; END; END $$"
+        )
+        psql(
+            "DO $$ BEGIN BEGIN "
+            "INSERT INTO ingestion_checkpoints(node_id,revision,updated_at,record) "
+            "VALUES ('oversize-probe',1,now(),jsonb_build_object('payload',repeat('x',"
+            + str(MAX_CHECKPOINT_BYTES)
+            + "))); "
+            "RAISE EXCEPTION 'oversize checkpoint unexpectedly accepted'; "
+            "EXCEPTION WHEN check_violation THEN NULL; END; END $$"
+        )
+        assert (
+            psql(
+                "SELECT count(*) FROM ingestion_checkpoints "
+                "WHERE node_id IN ('revision-probe','oversize-probe')"
+            ).strip()
+            == "0"
+        )
+        proof["checkpoint_database_bounds"] = {
+            "model_bytes": MAX_CHECKPOINT_BYTES,
+            "size_constraint": size_constraint,
+            "revision_constraint": revision_constraint,
+            "zero_revision_rejected": True,
+            "oversize_rejected": True,
+        }
+
+        psql("DROP TABLE ingestion_checkpoints")
+        unhealthy = client.get(api + "/health")
+        metrics_response = client.get(api + "/metrics")
+        nodes = client.get(api + "/nodes")
+        assert unhealthy.status_code == 503 and nodes.status_code == 503
+        assert metrics_response.status_code == 200
+        assert "fleetdoctor_incident_storage_up 0.0" in metrics_response.text
+        proof["missing_checkpoint_health"] = {
+            "health_status": unhealthy.status_code,
+            "nodes_status": nodes.status_code,
+            "metrics_storage_up": 0,
+        }
+        compose(
+            "up",
+            "-d",
+            "--force-recreate",
+            "--no-deps",
+            "--wait",
+            "--wait-timeout",
+            "90",
+            "collector",
+        )
+        restored = client.get(api + "/health")
+        assert restored.status_code == 200
+        proof["missing_checkpoint_health"]["collector_restored"] = True
         proof["status"] = "passed"
     return proof

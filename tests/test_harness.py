@@ -239,16 +239,34 @@ class Injector:
         self.started = self.cleaned = 0
         self.cleanup_failures = 0
         self.interrupt = False
+        self.expire_after_callback = False
+        self.status_failure_call: int | None = None
+        self.status_calls = 0
+        self.status_delays: dict[int, float] = {}
+        self.token = ""
 
     def probe(self) -> dict[str, Any]:
         return {"mapping": {"target": DISK_PATH}}
 
     def start(self, token: str, duration: int) -> dict[str, Any]:
         self.started += 1
+        self.token = token
         self.backend.phase = "inject"
         if self.interrupt:
             raise InterruptedError("lost controller")
         return {"token": token, "duration": duration}
+
+    def status(self, token: str) -> dict[str, Any]:
+        self.status_calls += 1
+        self.backend.clock.sleep(self.status_delays.get(self.status_calls, 0))
+        if self.status_calls == self.status_failure_call:
+            raise RuntimeError("live disk status invalid")
+        return {
+            "token": token,
+            "mapping": {"target": DISK_PATH},
+            "filler_inode": 10,
+            "cleanup_complete": self.expire_after_callback and self.status_calls > 1,
+        }
 
     def cleanup(self, token: str) -> dict[str, Any]:
         self.cleaned += 1
@@ -374,3 +392,163 @@ def test_no_incident_times_out_and_keeps_failure_report(tmp_path: Path) -> None:
     assert clock.now > 60 and injector.cleaned == 1
     assert "threshold_observed" in harness.report["events"]
     assert "api_diagnosis" not in harness.report["events"]
+
+
+def test_task04_callback_runs_inside_owned_injection_and_shared_deadline(tmp_path: Path) -> None:
+    harness, _, injector, clock = rig(tmp_path)
+    seen: list[float] = []
+
+    def callback(report: dict[str, Any], deadline: float) -> dict[str, Any]:
+        assert report["incident_id"] == "incident-1"
+        assert deadline == pytest.approx(clock.now + 70)
+        seen.append(deadline)
+        clock.sleep(10)
+        return {"collector_restarted": True}
+
+    harness.after_diagnosis = callback
+    harness.max_injection_seconds = 240
+    result = harness.run()
+    assert seen and result["after_diagnosis"] == {"collector_restarted": True}
+    assert result["owned_status_before_callback"]["token"] == result["token"]
+    assert result["owned_status_after_callback"]["token"] == result["token"]
+    assert injector.cleaned == 1
+
+
+@pytest.mark.parametrize("status_failure_call", [1, 2])
+def test_task04_callback_live_status_failure_blocks_pre_and_post_restart_gates(
+    tmp_path: Path, status_failure_call: int
+) -> None:
+    harness, _, injector, _ = rig(tmp_path)
+    callback_calls = 0
+
+    def callback(report: dict[str, Any], deadline: float) -> dict[str, Any]:
+        nonlocal callback_calls
+        callback_calls += 1
+        return {"collector_restarted": True}
+
+    injector.status_failure_call = status_failure_call
+    harness.after_diagnosis = callback
+    harness.max_injection_seconds = 240
+    with pytest.raises(RuntimeError, match="live disk status invalid"):
+        harness.run()
+    assert callback_calls == (0 if status_failure_call == 1 else 1)
+    assert injector.cleaned == 1
+    assert harness.report["status"] == "failed"
+
+
+def test_task04_callback_refuses_without_eighty_second_reserve(tmp_path: Path) -> None:
+    harness, _, injector, _ = rig(tmp_path)
+    harness.after_diagnosis = lambda report, deadline: {"late": False}
+    harness.max_injection_seconds = 79
+    with pytest.raises(RuntimeError):
+        harness.run()
+    assert injector.cleaned == 1
+    assert any("80" in error for error in harness.report["errors"])
+
+
+def test_task04_callback_rechecks_reserve_after_slow_pre_status(tmp_path: Path) -> None:
+    harness, _, injector, _ = rig(tmp_path)
+    callback_calls = 0
+
+    def callback(report: dict[str, Any], deadline: float) -> dict[str, Any]:
+        nonlocal callback_calls
+        callback_calls += 1
+        return {"collector_restarted": True}
+
+    injector.status_delays[1] = 11
+    harness.after_diagnosis = callback
+    harness.max_injection_seconds = 100
+    with pytest.raises(RuntimeError, match="at least 80 seconds"):
+        harness.run()
+    assert callback_calls == 0
+    assert injector.cleaned == 1
+    assert harness.report["status"] == "failed"
+    assert "after_diagnosis" not in harness.report
+    assert "after_diagnosis_complete" not in harness.report["events"]
+    assert harness.report["errors"] == [
+        "RuntimeError: at least 80 seconds must remain before collector restart"
+    ]
+
+
+def test_task04_callback_rejects_late_post_status_without_success_publication(
+    tmp_path: Path,
+) -> None:
+    harness, _, injector, clock = rig(tmp_path)
+
+    def callback(report: dict[str, Any], deadline: float) -> dict[str, Any]:
+        clock.sleep(70)
+        return {"collector_restarted": True}
+
+    injector.status_delays[2] = 21
+    harness.after_diagnosis = callback
+    harness.max_injection_seconds = 100
+    with pytest.raises(RuntimeError, match="acceptance returned after deadline"):
+        harness.run()
+    assert injector.cleaned == 1
+    assert harness.report["status"] == "failed"
+    assert "owned_status_after_callback" not in harness.report
+    assert "after_diagnosis" not in harness.report
+    assert "after_diagnosis_complete" not in harness.report["events"]
+    assert harness.report["errors"] == [
+        "RuntimeError: collector restart acceptance returned after deadline"
+    ]
+
+
+def test_task04_callback_accepts_exact_admission_and_action_boundaries(tmp_path: Path) -> None:
+    harness, _, injector, clock = rig(tmp_path)
+    callback_calls = 0
+
+    def callback(report: dict[str, Any], deadline: float) -> dict[str, Any]:
+        nonlocal callback_calls
+        callback_calls += 1
+        assert deadline == 80
+        clock.sleep(60)
+        return {"collector_restarted": True}
+
+    injector.status_delays = {1: 10, 2: 10}
+    harness.after_diagnosis = callback
+    harness.max_injection_seconds = 100
+    result = harness.run()
+    assert callback_calls == 1
+    assert result["status"] == "passed"
+    assert result["events"]["after_diagnosis_complete"]["monotonic_seconds"] == 80
+    assert result["after_diagnosis"] == {"collector_restarted": True}
+    assert injector.cleaned == 1
+
+
+def test_task04_callback_records_timely_post_status_completion(tmp_path: Path) -> None:
+    harness, _, injector, clock = rig(tmp_path)
+
+    def callback(report: dict[str, Any], deadline: float) -> dict[str, Any]:
+        clock.sleep(10)
+        return {"collector_restarted": True}
+
+    injector.status_delays = {1: 5, 2: 7}
+    harness.after_diagnosis = callback
+    harness.max_injection_seconds = 240
+    result = harness.run()
+    assert result["status"] == "passed"
+    assert result["events"]["after_diagnosis_complete"]["monotonic_seconds"] == 22
+    assert result["after_diagnosis"] == {"collector_restarted": True}
+    assert injector.cleaned == 1
+
+
+@pytest.mark.parametrize("failure", ["late", "expired"])
+def test_task04_callback_rejects_late_result_or_expired_filler(
+    tmp_path: Path, failure: str
+) -> None:
+    harness, _, injector, clock = rig(tmp_path)
+    harness.max_injection_seconds = 240
+
+    def callback(report: dict[str, Any], deadline: float) -> dict[str, Any]:
+        if failure == "late":
+            clock.sleep(71)
+        else:
+            injector.expire_after_callback = True
+        return {"collector_restarted": True}
+
+    harness.after_diagnosis = callback
+    with pytest.raises(RuntimeError):
+        harness.run()
+    assert injector.cleaned == 1
+    assert harness.report["status"] == "failed"

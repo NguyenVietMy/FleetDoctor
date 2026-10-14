@@ -1,7 +1,6 @@
-"""Single-worker collection with transactional incidents; sample checkpoints are task 04."""
+"""Single-worker collection with atomic incident and ingestion checkpoints."""
 
 import asyncio
-import hashlib
 import hmac
 import json
 import os
@@ -19,13 +18,22 @@ from fastapi.responses import JSONResponse
 from prometheus_client import CollectorRegistry, Gauge, generate_latest
 from pydantic import SecretStr, ValidationError
 
+from fleetdoctor.checkpoint import (
+    MAX_CHECKPOINT_BYTES,
+    Checkpoint,
+    IdentityFingerprint,
+    RetiredSession,
+    sample_fingerprint,
+)
 from fleetdoctor.history import HISTORY_METRICS, HistoryClient, validate_range
 from fleetdoctor.incidents import DiskConfig
 from fleetdoctor.rules import DiskEvaluator
 from fleetdoctor.schema import FIELDS, Sample
-from fleetdoctor.store import IncidentStore, PostgresStore, StoreError
+from fleetdoctor.store import IncidentStore, PostgresStore, StoreError, StoreSnapshot
 
 MAX_BODY = 65536
+ACKNOWLEDGEMENT_HEADER = "X-FleetDoctor-Acknowledgement"
+ACKNOWLEDGEMENT_VERSION = "checkpoints-v1"
 METRICS = {
     "total_bytes": "size_bytes",
     "free_bytes": "free_bytes",
@@ -50,27 +58,79 @@ class State:
         self.nodes, self.paths, self.clock = nodes, paths, clock
         self.latest: dict[str, Sample] = {}
         self.rejected: dict[str, str] = {}
+        self.live: set[str] = set()
         self.retired: dict[str, list[tuple[str, str]]] = {node: [] for node in nodes}
-        self.identities: dict[str, OrderedDict[tuple[str, str, int], bytes]] = {
+        self.identities: dict[str, OrderedDict[tuple[str, str, int], str]] = {
             node: OrderedDict() for node in nodes
         }
+        self.published_checkpoints: dict[str, Checkpoint] = {}
         self.lock = Lock()
         self.store, self.config = store, config
-        self.evaluator = DiskEvaluator(store.active())
+        snapshot = store.snapshot(set(nodes))
+        self.evaluator = DiskEvaluator(snapshot.active)
+        for checkpoint in snapshot.checkpoints.values():
+            self._publish_checkpoint(checkpoint, live=False)
+
+    def _publish_checkpoint(self, checkpoint: Checkpoint, *, live: bool) -> None:
+        node = checkpoint.node_id
+        self.latest[node] = checkpoint.latest.model_copy(deep=True)
+        self.identities[node] = OrderedDict(
+            (item.key, item.fingerprint) for item in checkpoint.fingerprints
+        )
+        self.retired[node] = [item.key for item in checkpoint.retired_sessions]
+        self.published_checkpoints[node] = checkpoint.model_copy(deep=True)
+        if live:
+            self.live.add(node)
+        else:
+            self.live.discard(node)
+
+    def _reconcile(self, snapshot: StoreSnapshot) -> None:
+        if self.published_checkpoints.keys() - snapshot.checkpoints.keys():
+            raise StoreError("published ingestion checkpoint is missing")
+        changed_nodes = {
+            node
+            for node, checkpoint in snapshot.checkpoints.items()
+            if self.published_checkpoints.get(node) != checkpoint
+        }
+        for node in changed_nodes:
+            self._publish_checkpoint(snapshot.checkpoints[node], live=False)
+            for key in list(self.evaluator.windows):
+                if key[0] == node:
+                    self.evaluator.windows.pop(key)
+        canonical = {(i.node_id, i.resource): i for i in snapshot.active}
+        if canonical != self.evaluator.active:
+            affected = {
+                node
+                for node in self.nodes
+                if {key: value for key, value in canonical.items() if key[0] == node}
+                != {key: value for key, value in self.evaluator.active.items() if key[0] == node}
+            }
+            self.evaluator.active = canonical
+            for node in affected:
+                for key in list(self.evaluator.windows):
+                    if key[0] == node:
+                        self.evaluator.windows.pop(key)
+                self.live.discard(node)
+            self.evaluator.reloaded.update(
+                incident.id for incident in snapshot.active if incident.node_id in affected
+            )
 
     def accept(self, sample: Sample) -> str:
         with self.lock:
             now = self.clock()
-            age = (now - sample.observed_at).total_seconds()
-            if age < -2 or age > 10:
-                self.rejected[sample.node_id] = "clock_skew" if age < -2 else "late_observation"
-                return "ineligible"
+            snapshot = self.store.snapshot(set(self.nodes))
+            self._reconcile(snapshot)
             key = (str(sample.boot_id), str(sample.agent_session_id), sample.sequence)
-            fingerprint = hashlib.sha256(sample.model_dump_json().encode()).digest()
+            fingerprint = sample_fingerprint(sample)
             known = self.identities[sample.node_id].get(key)
             if known is not None:
                 if known != fingerprint:
                     raise HTTPException(409, "conflicting sample identity")
+                return "duplicate"
+            age = (now - sample.observed_at).total_seconds()
+            if age < -2 or age > 10:
+                self.rejected[sample.node_id] = "clock_skew" if age < -2 else "late_observation"
+                return "ineligible"
             previous = self.latest.get(sample.node_id)
             identity = (str(sample.boot_id), str(sample.agent_session_id))
             if identity in self.retired[sample.node_id]:
@@ -86,24 +146,38 @@ class State:
                 if sample.observed_at <= previous.observed_at:
                     return "superseded"
             staged = deepcopy(self.evaluator)
-            # A failed COMMIT response may still have durably changed incidents.
-            # Reconcile that outcome before this observation, without advancing windows,
-            # latest samples or deduplication until its own transaction succeeds.
-            active = self.store.active()
-            staged.active = {(i.node_id, i.resource): i for i in active}
-            staged.reloaded.intersection_update(i.id for i in active)
             changes = staged.evaluate(sample, previous, now, self.config)
-            self.store.apply(changes)
-            # Every eligible batch passes storage before latest, dedup, identity or windows advance.
+            retired = list(self.retired[sample.node_id])
             if previous and identity != prev_identity:
-                self.retired[sample.node_id].append(prev_identity)
-                self.retired[sample.node_id] = self.retired[sample.node_id][-8:]
-            self.evaluator = staged
-            self.latest[sample.node_id] = sample
-            identities = self.identities[sample.node_id]
+                retired.append(prev_identity)
+                retired = retired[-8:]
+            identities = OrderedDict(self.identities[sample.node_id])
             identities[key] = fingerprint
             if len(identities) > 60:
                 identities.popitem(last=False)
+            current = self.published_checkpoints.get(sample.node_id)
+            checkpoint = Checkpoint(
+                node_id=sample.node_id,
+                revision=(current.revision + 1) if current else 1,
+                latest=sample,
+                fingerprints=[
+                    IdentityFingerprint(
+                        boot_id=UUID(boot),
+                        agent_session_id=UUID(session),
+                        sequence=sequence,
+                        fingerprint=value,
+                    )
+                    for (boot, session, sequence), value in identities.items()
+                ],
+                retired_sessions=[
+                    RetiredSession(boot_id=UUID(boot), agent_session_id=UUID(session))
+                    for boot, session in retired
+                ],
+            )
+            self.store.commit(changes, checkpoint)
+            # Publication follows the successful connection-context COMMIT.
+            self.evaluator = staged
+            self._publish_checkpoint(checkpoint, live=True)
             self.rejected.pop(sample.node_id, None)
             return "accepted"
 
@@ -114,7 +188,7 @@ class State:
             active = self.store.active() if include_counts else None
             sample = self.latest.get(node)
             age = (self.clock() - sample.observed_at).total_seconds() if sample else None
-            fresh = age is not None and -2 <= age <= 10
+            fresh = node in self.live and age is not None and -2 <= age <= 10
             return {
                 "node_id": node,
                 "observed_at": sample.observed_at if sample else None,
@@ -137,7 +211,7 @@ class State:
                 },
                 "delivery_error": self.rejected.get(node),
                 "delivery": {
-                    "available": bool(sample and sample.delivery is not None),
+                    "available": bool(fresh and sample and sample.delivery is not None),
                     "scope": "agent_session",
                     "discard_total": sample.delivery.discard_total
                     if sample and sample.delivery
@@ -200,12 +274,23 @@ def create_app(
             "disk_rule": state.config.model_dump(),
             "filesystems": list(paths),
             "cadence_seconds": 5,
+            "ingestion_checkpoint": {
+                "durable": True,
+                "max_record_bytes": MAX_CHECKPOINT_BYTES,
+                "fingerprints_per_node": 60,
+                "retired_sessions_per_node": 8,
+            },
         }
 
     @app.get("/health")
     def health() -> dict[str, str]:
         require_storage()
-        return {"status": "ok", "storage": "incidents_durable_samples_memory", "slice": "03"}
+        return {
+            "status": "ok",
+            "storage": "incidents_and_ingestion_checkpoints_durable",
+            "sample_history": "not_persisted",
+            "slice": "04",
+        }
 
     @app.post("/ingest")
     async def ingest(request: Request) -> dict[str, Any]:
@@ -235,11 +320,25 @@ def create_app(
             raise HTTPException(403, "node identity not authorized")
         if {fs.mountpoint for fs in sample.filesystems} != set(paths):
             raise HTTPException(422, "sample must cover exactly the configured filesystems")
-        return {
-            "status": await asyncio.to_thread(state.accept, sample),
+        acknowledgement = request.headers.get(ACKNOWLEDGEMENT_HEADER)
+        if acknowledgement is not None and acknowledgement != ACKNOWLEDGEMENT_VERSION:
+            raise HTTPException(422, "unsupported acknowledgement version")
+        status = await asyncio.to_thread(state.accept, sample)
+        result: dict[str, Any] = {
+            "status": status,
             "durable": False,
             "incidents_durable": True,
         }
+        if acknowledgement == ACKNOWLEDGEMENT_VERSION:
+            result.update(
+                checkpoint_durable=status in ("accepted", "duplicate"),
+                identity={
+                    key: value
+                    for key, value in sample.model_dump(mode="json").items()
+                    if key in ("node_id", "boot_id", "agent_session_id", "sequence", "observed_at")
+                },
+            )
+        return result
 
     @app.get("/nodes")
     def list_nodes() -> dict[str, Any]:

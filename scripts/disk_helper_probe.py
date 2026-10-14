@@ -3,6 +3,7 @@
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -11,6 +12,19 @@ from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
 import disk_resource as helper  # noqa: E402
+
+
+def locked_status(token: str) -> dict[str, Any]:
+    value: dict[str, Any] = json.loads(
+        helper.command(
+            sys.executable,
+            str(Path(helper.__file__).resolve()),
+            "status",
+            "--token",
+            token,
+        )
+    )
+    return value
 
 
 def main() -> None:
@@ -46,6 +60,21 @@ def main() -> None:
         helper.save(helper.IDENTITY, identity, mode=0o644)
         run = helper.start(uuid4().hex, 30)
         report["run"] = run
+        active = locked_status(run["token"])
+        assert active == run
+        report["locked_live_status"] = active
+        retained_lease = helper.LEASE.with_suffix(".retained")
+        helper.LEASE.rename(retained_lease)
+        try:
+            try:
+                locked_status(run["token"])
+            except subprocess.CalledProcessError:
+                report["missing_lease_status_rejected"] = True
+            else:
+                raise AssertionError("missing live lease passed status")
+        finally:
+            retained_lease.rename(helper.LEASE)
+        assert locked_status(run["token"])["cleanup_complete"] is False
         deadline = time.monotonic() + 25
         while True:
             fs = os.statvfs(helper.MOUNT)
@@ -61,6 +90,12 @@ def main() -> None:
         assert helper.owned_pid(run)
         os.kill(run["worker_pid"], signal.SIGKILL)
         report["worker_killed_to_prove_independent_watchdog"] = True
+        try:
+            locked_status(run["token"])
+        except subprocess.CalledProcessError:
+            report["dead_worker_status_rejected"] = True
+        else:
+            raise AssertionError("dead worker passed live status")
         deadline = time.monotonic() + 35
         filler = helper.MOUNT / ("filler-" + run["token"])
         while filler.exists() or helper.LEASE.exists():
@@ -69,6 +104,7 @@ def main() -> None:
             time.sleep(0.2)
         record = json.loads(helper.run_path(run["token"]).read_text())
         assert record["cleanup_complete"]
+        assert locked_status(run["token"])["cleanup_complete"] is True
         report["watchdog_cleanup"] = record
         marker = helper.MOUNT / "retained-marker"
         marker.write_text("retained image contents")
@@ -108,6 +144,7 @@ def main() -> None:
         resource = helper.prepare()
         second = helper.start(uuid4().hex, 30)
         helper.cleanup(second["token"])
+        assert locked_status(second["token"])["cleanup_complete"] is True
         assert not helper.LEASE.exists()
         assert marker.read_text() == "retained image contents"
         report["explicit_cleanup_preserves_unrelated_files"] = True

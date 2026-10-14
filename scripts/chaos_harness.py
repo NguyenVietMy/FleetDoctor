@@ -25,6 +25,7 @@ class Backend(Protocol):
 class Injector(Protocol):
     def probe(self) -> dict[str, Any]: ...
     def start(self, token: str, duration: int) -> dict[str, Any]: ...
+    def status(self, token: str) -> dict[str, Any]: ...
     def cleanup(self, token: str) -> dict[str, Any]: ...
 
 
@@ -84,6 +85,8 @@ class DiskHarness:
         self.api, self.injector, self.target, self.reference = api, injector, target, reference
         self.output, self.monotonic, self.sleep = output, monotonic, sleep
         self.lease_directory = lease_directory
+        self.after_diagnosis: Callable[[dict[str, Any], float], dict[str, Any]] | None = None
+        self.max_injection_seconds = 180
         self.report: dict[str, Any] = {
             "schema_version": 1,
             "scenario": "disk_fill",
@@ -107,6 +110,18 @@ class DiskHarness:
             "injection_attempted": False,
             "source": source_manifest(),
         }
+
+    def owned_status(self) -> dict[str, Any]:
+        status = self.injector.status(self.report["token"])
+        if (
+            status.get("token") != self.report["token"]
+            or status.get("cleanup_complete") is not False
+            or not isinstance(status.get("filler_inode"), int)
+            or status["filler_inode"] <= 0
+            or status.get("mapping") != self.report["original_resource"].get("mapping")
+        ):
+            raise RuntimeError("owned disk filler/lease/mapping is no longer active")
+        return status
 
     def event(self, name: str, observed: float | None = None) -> None:
         self.report["events"][name] = {
@@ -208,15 +223,23 @@ class DiskHarness:
                 raise TimeoutError("preparation deadline exceeded")
             self.event("preparation_complete")
             self.event("injection_start")
+            self.report["max_injection_seconds"] = self.max_injection_seconds
             self.report["injection_attempted"] = True
             attempted = True  # includes failures after a remote side effect but before reply
-            self.report["injector"] = self.injector.start(self.report["token"], 180)
+            self.report["injector"] = self.injector.start(
+                self.report["token"], self.max_injection_seconds
+            )
             write_report(self.output, self.report)
+            injection_deadline = (
+                self.report["events"]["injection_start"]["monotonic_seconds"]
+                + self.max_injection_seconds
+                - 10
+            )
             trigger_deadline = self.monotonic() + 45
             while True:
                 before = self.monotonic()
                 current, active, resource_observed, observed = self.poll()
-                if observed - self.report["events"]["injection_start"]["monotonic_seconds"] > 170:
+                if observed > injection_deadline:
                     raise TimeoutError("controller injection deadline")
                 if (
                     "threshold_observed" not in self.report["events"]
@@ -251,10 +274,47 @@ class DiskHarness:
                         self.report["opening_detail"] = self.api.get("/diagnoses/" + incident_id)
                         self.report["actual_diagnosis"] = matching["rule"]
                         self.event("api_diagnosis", observed)
+                        if self.after_diagnosis is not None:
+                            callback_started = self.monotonic()
+                            if injection_deadline - callback_started < 80:
+                                raise RuntimeError(
+                                    "at least 80 seconds must remain before collector restart"
+                                )
+                            owned_status_before_callback = self.owned_status()
+                            callback_started = self.monotonic()
+                            if injection_deadline - callback_started < 80:
+                                raise RuntimeError(
+                                    "at least 80 seconds must remain before collector restart"
+                                )
+                            self.report["owned_status_before_callback"] = (
+                                owned_status_before_callback
+                            )
+                            callback_deadline = callback_started + 70
+                            result = self.after_diagnosis(self.report, callback_deadline)
+                            callback_finished = self.monotonic()
+                            if (
+                                callback_finished > callback_deadline
+                                or callback_finished > injection_deadline
+                            ):
+                                raise RuntimeError(
+                                    "collector restart callback returned after deadline"
+                                )
+                            owned_status_after_callback = self.owned_status()
+                            acceptance_finished = self.monotonic()
+                            if (
+                                acceptance_finished > callback_deadline
+                                or acceptance_finished > injection_deadline
+                            ):
+                                raise RuntimeError(
+                                    "collector restart acceptance returned after deadline"
+                                )
+                            self.report["owned_status_after_callback"] = owned_status_after_callback
+                            self.report["after_diagnosis"] = result
+                            self.event("after_diagnosis_complete", acceptance_finished)
                         break
                 elif observed > trigger_deadline:
                     raise TimeoutError("trigger observation timeout")
-                if observed - self.report["events"]["injection_start"]["monotonic_seconds"] > 170:
+                if observed > injection_deadline:
                     raise TimeoutError("controller injection deadline")
                 self.sleep(max(0, 1 - (self.monotonic() - before)))
         except BaseException as exc:

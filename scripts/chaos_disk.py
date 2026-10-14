@@ -48,6 +48,9 @@ class RemoteInjector:
     def start(self, token: str, duration: int) -> dict[str, Any]:
         return self.call("start", token, duration)
 
+    def status(self, token: str) -> dict[str, Any]:
+        return self.call("status", token)
+
     def cleanup(self, token: str) -> dict[str, Any]:
         return self.call("cleanup", token)
 

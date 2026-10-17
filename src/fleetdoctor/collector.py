@@ -26,8 +26,8 @@ from fleetdoctor.checkpoint import (
     sample_fingerprint,
 )
 from fleetdoctor.history import HISTORY_METRICS, HistoryClient, validate_range
-from fleetdoctor.incidents import DiskConfig
-from fleetdoctor.rules import DiskEvaluator
+from fleetdoctor.incidents import CpuConfig, DiskConfig
+from fleetdoctor.rules import CompositeEvaluator
 from fleetdoctor.schema import FIELDS, Sample
 from fleetdoctor.store import IncidentStore, PostgresStore, StoreError, StoreSnapshot
 
@@ -54,6 +54,7 @@ class State:
         clock: Callable[[], datetime],
         store: IncidentStore,
         config: DiskConfig,
+        cpu_config: CpuConfig | None = None,
     ) -> None:
         self.nodes, self.paths, self.clock = nodes, paths, clock
         self.latest: dict[str, Sample] = {}
@@ -65,9 +66,9 @@ class State:
         }
         self.published_checkpoints: dict[str, Checkpoint] = {}
         self.lock = Lock()
-        self.store, self.config = store, config
+        self.store, self.config, self.cpu_config = store, config, cpu_config or CpuConfig()
         snapshot = store.snapshot(set(nodes))
-        self.evaluator = DiskEvaluator(snapshot.active)
+        self.evaluator = CompositeEvaluator(snapshot.active)
         for checkpoint in snapshot.checkpoints.values():
             self._publish_checkpoint(checkpoint, live=False)
 
@@ -94,10 +95,8 @@ class State:
         }
         for node in changed_nodes:
             self._publish_checkpoint(snapshot.checkpoints[node], live=False)
-            for key in list(self.evaluator.windows):
-                if key[0] == node:
-                    self.evaluator.windows.pop(key)
-        canonical = {(i.node_id, i.resource): i for i in snapshot.active}
+            self.evaluator.reset_node(node)
+        canonical = {(i.node_id, i.rule, i.resource): i for i in snapshot.active}
         if canonical != self.evaluator.active:
             affected = {
                 node
@@ -105,15 +104,9 @@ class State:
                 if {key: value for key, value in canonical.items() if key[0] == node}
                 != {key: value for key, value in self.evaluator.active.items() if key[0] == node}
             }
-            self.evaluator.active = canonical
             for node in affected:
-                for key in list(self.evaluator.windows):
-                    if key[0] == node:
-                        self.evaluator.windows.pop(key)
                 self.live.discard(node)
-            self.evaluator.reloaded.update(
-                incident.id for incident in snapshot.active if incident.node_id in affected
-            )
+            self.evaluator.replace_active(snapshot.active, affected)
 
     def accept(self, sample: Sample) -> str:
         with self.lock:
@@ -146,7 +139,7 @@ class State:
                 if sample.observed_at <= previous.observed_at:
                     return "superseded"
             staged = deepcopy(self.evaluator)
-            changes = staged.evaluate(sample, previous, now, self.config)
+            changes = staged.evaluate(sample, previous, now, self.config, self.cpu_config)
             retired = list(self.retired[sample.node_id])
             if previous and identity != prev_identity:
                 retired.append(prev_identity)
@@ -189,6 +182,32 @@ class State:
             sample = self.latest.get(node)
             age = (self.clock() - sample.observed_at).total_seconds() if sample else None
             fresh = node in self.live and age is not None and -2 <= age <= 10
+            by_rule = (
+                {
+                    rule: sum(i.node_id == node and i.rule == rule for i in active)
+                    for rule in ("disk_block_exhaustion", "cpu_saturation")
+                }
+                if active is not None
+                else None
+            )
+            cpu = sample.cpu if sample else None
+            cpu_coverage = {
+                "host_rates": "available"
+                if fresh and cpu is not None and cpu.busy_percent is not None
+                else "unavailable",
+                "runnable": "available"
+                if fresh and cpu is not None and cpu.runnable_processes is not None
+                else "unavailable",
+                "logical_cores": "available"
+                if fresh and cpu is not None and cpu.logical_cores is not None
+                else "unavailable",
+                "process_inventory": cpu.process_inventory
+                if fresh and cpu is not None
+                else "unavailable",
+                "errors": cpu.errors
+                if fresh and cpu is not None
+                else ["observation_not_fresh" if sample else "observation_unavailable"],
+            }
             return {
                 "node_id": node,
                 "observed_at": sample.observed_at if sample else None,
@@ -198,6 +217,7 @@ class State:
                 "active_incident_count": sum(i.node_id == node for i in active)
                 if active is not None
                 else None,
+                "active_incident_counts": by_rule,
                 "diagnosis_coverage": {
                     path: "available"
                     if fresh
@@ -230,14 +250,16 @@ class State:
                 }
                 if sample
                 else {},
+                "cpu_coverage": cpu_coverage,
                 "sample": sample.model_dump(
-                    mode="json", exclude=set() if fresh else {"filesystems"}
+                    mode="json", exclude=set() if fresh else {"filesystems", "cpu"}
                 )
                 if sample
                 else None,
                 "filesystems": [fs.model_dump() for fs in sample.filesystems]
                 if sample and fresh
                 else None,
+                "cpu": cpu.model_dump(mode="json") if cpu is not None and fresh else None,
             }
 
 
@@ -248,13 +270,14 @@ def create_app(
     history: HistoryClient | None = None,
     store: IncidentStore | None = None,
     config: DiskConfig | None = None,
+    cpu_config: CpuConfig | None = None,
 ) -> FastAPI:
     if not nodes or len(nodes) > 16 or any(len(v.get_secret_value()) < 32 for v in nodes.values()):
         raise ValueError("configure 1..16 node tokens of at least 32 characters")
     if not paths or len(paths) > 8 or len(set(paths)) != len(paths):
         raise ValueError("configure 1..8 unique filesystems")
     storage = store if store is not None else PostgresStore.environment()
-    state = State(nodes, paths, clock, storage, config or DiskConfig())
+    state = State(nodes, paths, clock, storage, config or DiskConfig(), cpu_config or CpuConfig())
     app = FastAPI(title="FleetDoctor", version="0.1.0")
     app.state.fleet = state
     upstream = history or HistoryClient(os.getenv("PROMETHEUS_URL", "http://prometheus:9090"))
@@ -272,6 +295,7 @@ def create_app(
         require_storage()
         return {
             "disk_rule": state.config.model_dump(),
+            "cpu_rule": state.cpu_config.model_dump(),
             "filesystems": list(paths),
             "cadence_seconds": 5,
             "ingestion_checkpoint": {
@@ -289,7 +313,7 @@ def create_app(
             "status": "ok",
             "storage": "incidents_and_ingestion_checkpoints_durable",
             "sample_history": "not_persisted",
-            "slice": "04",
+            "slice": "05",
         }
 
     @app.post("/ingest")
@@ -421,7 +445,7 @@ def create_app(
         storage_g.set(int(storage_ok))
         active_g = Gauge(
             "fleetdoctor_active_incidents",
-            "Active disk incidents",
+            "Active incidents by fixed rule",
             ["node", "rule"],
             registry=registry,
         )
@@ -464,6 +488,59 @@ def create_app(
             )
             for field, suffix in METRICS.items()
         }
+        cpu_gauges = {
+            "busy_percent": Gauge(
+                "fleetdoctor_cpu_busy_ratio",
+                "Executed host CPU fraction",
+                ["node"],
+                registry=registry,
+            ),
+            "iowait_percent": Gauge(
+                "fleetdoctor_cpu_iowait_ratio",
+                "Host CPU iowait fraction",
+                ["node"],
+                registry=registry,
+            ),
+            "steal_percent": Gauge(
+                "fleetdoctor_cpu_steal_ratio",
+                "Host CPU steal fraction",
+                ["node"],
+                registry=registry,
+            ),
+            "logical_cores": Gauge(
+                "fleetdoctor_cpu_logical_cores",
+                "Online logical CPU count",
+                ["node"],
+                registry=registry,
+            ),
+            "runnable_processes": Gauge(
+                "fleetdoctor_cpu_runnable_processes",
+                "Instantaneous runnable process count",
+                ["node"],
+                registry=registry,
+            ),
+            "load_1m": Gauge(
+                "fleetdoctor_cpu_load_1m", "One-minute host load", ["node"], registry=registry
+            ),
+            "load_5m": Gauge(
+                "fleetdoctor_cpu_load_5m", "Five-minute host load", ["node"], registry=registry
+            ),
+            "load_15m": Gauge(
+                "fleetdoctor_cpu_load_15m", "Fifteen-minute host load", ["node"], registry=registry
+            ),
+        }
+        cpu_coverage = Gauge(
+            "fleetdoctor_cpu_coverage_ratio",
+            "Fraction of required CPU saturation sources available",
+            ["node"],
+            registry=registry,
+        )
+        process_coverage = Gauge(
+            "fleetdoctor_cpu_process_inventory_available",
+            "Bounded process inventory is available, possibly partial",
+            ["node"],
+            registry=registry,
+        )
         try:
             views = {node: state.view(node, include_counts=storage_ok) for node in nodes}
         except StoreError:
@@ -472,7 +549,8 @@ def create_app(
         storage_g.set(int(storage_ok))
         for node, view in views.items():
             if storage_ok:
-                active_g.labels(node, "disk_block_exhaustion").set(view["active_incident_count"])
+                for rule, count in view["active_incident_counts"].items():
+                    active_g.labels(node, rule).set(count)
             reporting.labels(node).set(int(view["delivery"]["available"]))
             if view["delivery"]["available"]:
                 discards.labels(node).set(view["delivery"]["discard_total"])
@@ -491,6 +569,19 @@ def create_app(
                         gauge.labels(node, fs["mountpoint"]).set(
                             value / 100 if field.endswith("percent") else value
                         )
+            available_sources = sum(
+                view["cpu_coverage"][name] == "available"
+                for name in ("host_rates", "runnable", "logical_cores")
+            )
+            cpu_coverage.labels(node).set(available_sources / 3 if view["fresh"] else 0)
+            process_coverage.labels(node).set(
+                int(view["cpu_coverage"]["process_inventory"] in ("complete", "partial"))
+            )
+            if view["cpu"] is not None:
+                for field, gauge in cpu_gauges.items():
+                    value = view["cpu"][field]
+                    if value is not None:
+                        gauge.labels(node).set(value / 100 if field.endswith("percent") else value)
         return Response(
             generate_latest(registry), media_type="text/plain; version=0.0.4; charset=utf-8"
         )
@@ -504,4 +595,5 @@ def app_factory() -> FastAPI:
         {node: SecretStr(token) for node, token in raw.items()},
         tuple(os.getenv("FLEETDOCTOR_FILESYSTEMS", "/").split(",")),
         config=DiskConfig.model_validate_json(os.getenv("FLEETDOCTOR_DISK_RULE", "{}")),
+        cpu_config=CpuConfig.model_validate_json(os.getenv("FLEETDOCTOR_CPU_RULE", "{}")),
     )

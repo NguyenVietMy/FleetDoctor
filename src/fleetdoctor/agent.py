@@ -15,10 +15,23 @@ import httpx
 from pydantic import SecretStr
 
 from fleetdoctor.collection import CollectionWorker
+from fleetdoctor.cpu import CpuCollectionWorker
 from fleetdoctor.delivery import DeliveryQueue, Outcome, send, uploader
-from fleetdoctor.schema import UNITS, Filesystem, Sample
+from fleetdoctor.schema import UNITS, UNITS_V2, CpuObservation, Filesystem, Sample
 
 LOG = logging.getLogger(__name__)
+
+
+def configured_cpu_pids(raw: str) -> tuple[int, ...]:
+    if not raw:
+        return ()
+    values = raw.split(",")
+    if len(values) > 16 or any(not value.isdigit() for value in values):
+        raise ValueError("FLEETDOCTOR_CPU_PIDS requires at most 16 comma-separated numeric PIDs")
+    result = tuple(int(value) for value in values)
+    if len(set(result)) != len(result) or any(value < 1 or value > 2**31 - 1 for value in result):
+        raise ValueError("FLEETDOCTOR_CPU_PIDS requires unique positive PIDs")
+    return result
 
 
 def make_sample(
@@ -28,16 +41,18 @@ def make_sample(
     sequence: int,
     filesystems: list[Filesystem],
     observed_at: datetime | None = None,
+    cpu: CpuObservation | None = None,
 ) -> Sample:
     return Sample(
-        schema_version=1,
+        schema_version=2 if cpu is not None else 1,
         node_id=node,
         boot_id=boot,
         agent_session_id=session,
         sequence=sequence,
         observed_at=observed_at or datetime.now(UTC),
-        units=UNITS,
+        units=UNITS_V2 if cpu is not None else UNITS,
         filesystems=filesystems,
+        cpu=cpu,
     )
 
 
@@ -56,14 +71,28 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
     boot = UUID(Path("/proc/sys/kernel/random/boot_id").read_text().strip())
     session = uuid4()
     worker = CollectionWorker()
+    cpu_worker = CpuCollectionWorker() if os.name == "posix" else None
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stopped.set)
     try:
-        await collect_loop(node, boot, session, worker, url, token, paths, once, stopped)
+        await collect_loop(
+            node,
+            boot,
+            session,
+            worker,
+            url,
+            token,
+            paths,
+            once,
+            stopped,
+            cpu_worker=cpu_worker,
+        )
     finally:
         worker.close()
+        if cpu_worker is not None:
+            cpu_worker.close()
 
 
 async def collect_loop(
@@ -76,6 +105,8 @@ async def collect_loop(
     paths: tuple[str, ...],
     once: bool,
     stopped: asyncio.Event,
+    *,
+    cpu_worker: CpuCollectionWorker | None = None,
 ) -> None:
     """Also used by the service proof with an ordinary synthetic collection worker."""
     sequence = 0
@@ -98,7 +129,20 @@ async def collect_loop(
                     # The worker cannot be closed concurrently with its outstanding call.
                     await collection
                     raise
-                sample = make_sample(node, boot, session, sequence, filesystems, observed_at)
+                cpu = None
+                if cpu_worker is not None:
+                    configured = configured_cpu_pids(os.getenv("FLEETDOCTOR_CPU_PIDS", ""))
+                    cpu_collection = asyncio.create_task(
+                        asyncio.to_thread(cpu_worker.collect, configured)
+                    )
+                    try:
+                        cpu = await asyncio.shield(cpu_collection)
+                    except asyncio.CancelledError:
+                        await cpu_collection
+                        raise
+                sample = make_sample(
+                    node, boot, session, sequence, filesystems, observed_at, cpu=cpu
+                )
                 queue.enqueue(sample, datetime.now(UTC))
                 if once:
                     entry = queue.select(datetime.now(UTC))
@@ -134,6 +178,7 @@ def main() -> None:
     paths = tuple(os.environ.get("FLEETDOCTOR_FILESYSTEMS", "/").split(","))
     if not token.get_secret_value() or not url.startswith("http://"):
         raise ValueError("configure a token and private-IP HTTP collector URL")
+    configured_cpu_pids(os.getenv("FLEETDOCTOR_CPU_PIDS", ""))
     make_sample(
         node,
         uuid4(),

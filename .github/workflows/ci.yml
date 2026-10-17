@@ -1,4 +1,4 @@
-name: Task 01 through 04 checks
+name: Task 01 through 05 checks
 on: [push, pull_request]
 jobs:
   filesystem-and-services:
@@ -21,12 +21,14 @@ jobs:
       - run: terraform -chdir=infra/aws fmt -check
       - run: terraform -chdir=infra/aws init -backend=false -lockfile=readonly
       - run: terraform -chdir=infra/aws validate
-      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task04-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task05-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/disk_helper_integration.py --output $RUNNER_TEMP/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - run: uv run python scripts/cpu_smoke.py --workers 2 --seconds 2 --output $RUNNER_TEMP/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: task04-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: task05-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/task04-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task05-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json

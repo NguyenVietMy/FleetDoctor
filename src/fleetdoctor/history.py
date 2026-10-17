@@ -12,6 +12,15 @@ HISTORY_METRICS = {
     "available_bytes": "fleetdoctor_filesystem_available_bytes",
     "used_bytes": "fleetdoctor_filesystem_used_bytes",
     "block_usage_ratio": "fleetdoctor_filesystem_block_usage_ratio",
+    "cpu_busy_ratio": "fleetdoctor_cpu_busy_ratio",
+    "cpu_iowait_ratio": "fleetdoctor_cpu_iowait_ratio",
+    "cpu_steal_ratio": "fleetdoctor_cpu_steal_ratio",
+    "cpu_logical_cores": "fleetdoctor_cpu_logical_cores",
+    "cpu_runnable_processes": "fleetdoctor_cpu_runnable_processes",
+    "cpu_load_1m": "fleetdoctor_cpu_load_1m",
+    "cpu_load_5m": "fleetdoctor_cpu_load_5m",
+    "cpu_load_15m": "fleetdoctor_cpu_load_15m",
+    "cpu_coverage_ratio": "fleetdoctor_cpu_coverage_ratio",
 }
 
 

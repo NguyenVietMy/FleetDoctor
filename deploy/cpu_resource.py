@@ -18,6 +18,7 @@ TOKEN = re.compile(r"^[a-f0-9]{16,64}$")
 USER = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 MAX_WORKERS = 64
 MAX_SECONDS = 180
+STATE_OWNER_UID = 0
 
 
 def unit_name(token: str) -> str:
@@ -42,7 +43,7 @@ def trusted_state(token: str) -> dict[str, Any] | None:
         return None
     with os.fdopen(descriptor, encoding="utf-8") as stream:
         stat = os.fstat(stream.fileno())
-        if os.name == "posix" and (stat.st_uid != 0 or stat.st_mode & 0o077):
+        if os.name == "posix" and (stat.st_uid != STATE_OWNER_UID or stat.st_mode & 0o077):
             raise ValueError("untrusted CPU helper state")
         record: dict[str, Any] = json.load(stream)
     if record.get("token") != token or record.get("unit") != unit_name(token):

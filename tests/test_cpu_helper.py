@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9,11 +10,14 @@ import pytest
 
 def configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cpu_resource, "STATE_ROOT", tmp_path)
+    if os.name == "posix":
+        monkeypatch.setattr(cpu_resource, "STATE_OWNER_UID", os.getuid())
 
 
 def test_token_and_workload_bounds_are_strict(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    assert cpu_resource.STATE_OWNER_UID == 0
     configure(tmp_path, monkeypatch)
     for token in ("x" * 16, "a" * 15, "../" + "a" * 16):
         with pytest.raises(ValueError):

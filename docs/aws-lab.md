@@ -63,6 +63,12 @@ uv run python scripts/lab.py start
 
 These commands use only the three IDs in this Terraform state. Start waits for status checks and then describes those IDs to discover **new ephemeral public IPs**. Reopen tunnels using the newly printed addresses. Private addresses persist, so agent ingestion continues when monitor services restart. If the owner's IP changes, update owner_cidr using a new reviewed Terraform plan in a new external output directory. Existing instances retain their selected AMI when AWS updates the image parameter. Plan preparation rejects instance deletion or replacement by default and retains rejected plans as `rejected.tfplan`, leaving no normal apply path. `--allow-instance-deletion` explicitly permits planning those actions; applying them still requires separate owner authorization and an export. Standard CPU mode can throttle later experiments; record credits, do not silently change mode.
 
+## Task05 CPU saturation procedure
+
+Deploy the Task05-compatible collector before any v2 agent. Before a separately authorized CPU run, record the exact source/config hashes, kernel, instance type, online logical cores, affinity/cgroup scope, CPU credit mode and balance, and verify both nodes have fresh CPU coverage with no active CPU incident. Read [the CPU runbook](cpu-saturation.md). The host-mode harness requires exactly `min(64, 2*online cores)` workers, caps the count at 64 and runtime at 180 seconds, reserves a separate cleanup window, and uses a token-owned transient systemd cgroup with independent expiry. Do not substitute the two-worker local smoke for this acceptance procedure.
+
+The later measured gate runs five retained CPU scenarios across the monitored nodes, verifies the correct `node/cpu/cpu_saturation` incident from ordinary telemetry, confirms the reference node remains clear, and requires three unique fresh recovery observations after cleanup. Preserve failed attempts and cleanup failures. Stop if affinity, quota, credits, or steal prevent the declared host scope; do not tune thresholds during a measured batch. AWS start/SSH/workload execution remains a separate authorization gate.
+
 ## Export and retire
 
 While the lab is running and SSH works:

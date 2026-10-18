@@ -37,16 +37,26 @@ class CpuConfig(BaseModel):
         return self
 
 
+class OomConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+    recovery_percent: float = Field(default=80, ge=0, lt=100)
+    consecutive_samples: int = Field(default=3, ge=1, le=120, strict=True)
+    max_gap_seconds: float = Field(default=10, gt=0, le=10)
+    severity: Literal["info", "warning", "critical"] = "critical"
+
+
 class Incident(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: UUID
     node_id: str
     resource: str
-    rule: Literal["disk_block_exhaustion", "cpu_saturation"] = "disk_block_exhaustion"
+    rule: Literal["disk_block_exhaustion", "cpu_saturation", "workload_oom"] = (
+        "disk_block_exhaustion"
+    )
     status: Literal["active", "resolved"] = "active"
     severity: Literal["info", "warning", "critical"] = "critical"
     diagnosis: str
-    configuration: DiskConfig | CpuConfig
+    configuration: DiskConfig | CpuConfig | OomConfig
     opening_evidence: dict[str, JsonValue]
     latest_evidence: dict[str, JsonValue]
     opened_at: datetime
@@ -56,18 +66,46 @@ class Incident(BaseModel):
     resolved_at: datetime | None = None
     investigation_steps: list[str]
 
+    @model_validator(mode="before")
+    @classmethod
+    def deserialize_typed_configuration(cls, value: Any) -> Any:
+        """Bind persisted JSON to the rule-specific config before union matching."""
+        if not isinstance(value, dict) or not isinstance(value.get("configuration"), dict):
+            return value
+        rule = value.get("rule", "disk_block_exhaustion")
+        configuration: DiskConfig | CpuConfig | OomConfig
+        if rule == "disk_block_exhaustion":
+            configuration = DiskConfig.model_validate(value["configuration"])
+        elif rule == "cpu_saturation":
+            configuration = CpuConfig.model_validate(value["configuration"])
+        elif rule == "workload_oom":
+            configuration = OomConfig.model_validate(value["configuration"])
+        else:
+            return value
+        result = dict(value)
+        result["configuration"] = configuration
+        return result
+
     @model_validator(mode="after")
     def rule_contract(self) -> Self:
-        expected = DiskConfig if self.rule == "disk_block_exhaustion" else CpuConfig
+        expected = {
+            "disk_block_exhaustion": DiskConfig,
+            "cpu_saturation": CpuConfig,
+            "workload_oom": OomConfig,
+        }[self.rule]
         if not isinstance(self.configuration, expected):
             raise ValueError("incident rule and configuration disagree")
-        availability = (
-            "block_available" if self.rule == "disk_block_exhaustion" else "cpu_available"
-        )
+        availability = {
+            "disk_block_exhaustion": "block_available",
+            "cpu_saturation": "cpu_available",
+            "workload_oom": "memory_available",
+        }[self.rule]
         if availability not in self.opening_evidence or availability not in self.latest_evidence:
             raise ValueError("incident evidence does not match rule")
         if self.rule == "cpu_saturation" and self.resource != "cpu":
             raise ValueError("CPU saturation resource must be cpu")
+        if self.rule == "workload_oom" and not self.resource.startswith("/"):
+            raise ValueError("workload OOM resource must begin with its cgroup path")
         if not self.investigation_steps or any(
             len(step) > 512 for step in self.investigation_steps
         ):
@@ -77,12 +115,15 @@ class Incident(BaseModel):
     def view(self, now: datetime, *, detail: bool, reloaded: bool = False) -> dict[str, Any]:
         result = self.model_dump(mode="json")
         age = (now - self.observed_at).total_seconds()
+        availability = {
+            "disk_block_exhaustion": "block_available",
+            "cpu_saturation": "cpu_available",
+            "workload_oom": "memory_available",
+        }[self.rule]
         result.update(
             evidence_age_seconds=max(0, age),
             evidence_stale=reloaded or age > 15 or age < -2,
-            evidence_available=self.latest_evidence[
-                "block_available" if self.rule == "disk_block_exhaustion" else "cpu_available"
-            ],
+            evidence_available=self.latest_evidence[availability],
             evidence_fresh=not reloaded and -2 <= age <= 10,
         )
         if not detail:

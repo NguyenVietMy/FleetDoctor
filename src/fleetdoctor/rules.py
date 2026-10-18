@@ -5,8 +5,8 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from fleetdoctor.incidents import CpuConfig, DiskConfig, Incident
-from fleetdoctor.schema import Filesystem, Sample
+from fleetdoctor.incidents import CpuConfig, DiskConfig, Incident, OomConfig
+from fleetdoctor.schema import Filesystem, Sample, WorkloadMemoryObservation
 
 
 def evidence(sample: Sample, fs: Filesystem) -> dict[str, Any]:
@@ -29,7 +29,7 @@ def evidence(sample: Sample, fs: Filesystem) -> dict[str, Any]:
 class Window:
     opening: int = 0
     recovery: int = 0
-    configuration: DiskConfig | CpuConfig | None = None
+    configuration: DiskConfig | CpuConfig | OomConfig | None = None
 
 
 class DiskEvaluator:
@@ -235,24 +235,200 @@ class CpuEvaluator:
         return [opened]
 
 
+def oom_resource(workload: WorkloadMemoryObservation) -> str:
+    """Unambiguous bounded key; the display path remains separate in evidence."""
+    return workload.generation_key
+
+
+def _matching_previous(
+    previous: Sample | None, workload: WorkloadMemoryObservation
+) -> WorkloadMemoryObservation | None:
+    if previous is None or previous.memory is None:
+        return None
+    return next(
+        (
+            item
+            for item in previous.memory.workloads
+            if item.generation_key == workload.generation_key
+        ),
+        None,
+    )
+
+
+def oom_evidence(
+    sample: Sample,
+    workload: WorkloadMemoryObservation,
+    previous: WorkloadMemoryObservation | None,
+) -> tuple[dict[str, Any], int | None, int | None]:
+    oom_delta = kill_delta = None
+    if previous is not None and previous.events is not None and workload.events is not None:
+        oom_delta = workload.events.oom - previous.events.oom
+        kill_delta = workload.events.oom_kill - previous.events.oom_kill
+        if oom_delta < 0 or kill_delta < 0:
+            oom_delta = kill_delta = None
+    scoped_logs = []
+    if sample.memory is not None:
+        scoped_logs = [
+            value.model_dump(mode="json")
+            for value in sample.memory.kernel_logs
+            if value.cgroup_path == workload.cgroup_path
+        ]
+    return (
+        {
+            "node_id": sample.node_id,
+            "boot_id": str(sample.boot_id),
+            "agent_session_id": str(sample.agent_session_id),
+            "sequence": sample.sequence,
+            "observed_at": sample.observed_at.isoformat(),
+            "memory_available": workload.events is not None,
+            "resource": oom_resource(workload),
+            "cgroup_path": workload.cgroup_path,
+            "generation": {
+                "boot_id": str(workload.boot_id),
+                "st_dev": workload.st_dev,
+                "st_ino": workload.st_ino,
+            },
+            "workload": workload.model_dump(mode="json"),
+            "event_delta": {"oom": oom_delta, "oom_kill": kill_delta},
+            "scoped_kernel_logs": scoped_logs,
+            "kernel_log_coverage": sample.memory.kernel_log_coverage
+            if sample.memory is not None
+            else "unavailable",
+            "coverage": {
+                "local_events": "available" if workload.events is not None else "unavailable",
+                "snapshot": "stable" if workload.snapshot_stable else "unstable",
+                "usage_limit": "available"
+                if workload.current_bytes is not None and workload.max_bytes is not None
+                else ("unlimited" if workload.max_unlimited else "unavailable"),
+                "process_inventory": workload.process_inventory,
+                "errors": workload.errors,
+            },
+        },
+        oom_delta,
+        kill_delta,
+    )
+
+
+class OomEvaluator:
+    def __init__(self, active: list[Incident]) -> None:
+        self.active = {(incident.node_id, incident.resource): incident for incident in active}
+        self.windows: dict[tuple[str, str], Window] = {}
+        self.reloaded = {incident.id for incident in active}
+
+    def evaluate(
+        self, sample: Sample, previous: Sample | None, now: datetime, config: OomConfig
+    ) -> list[Incident]:
+        if sample.memory is None:
+            return []
+        changes: list[Incident] = []
+        for workload in sample.memory.workloads:
+            resource = oom_resource(workload)
+            key = sample.node_id, resource
+            incident = self.active.get(key)
+            measured = incident.configuration if incident else config
+            assert isinstance(measured, OomConfig)
+            prior = _matching_previous(previous, workload)
+            continuity = bool(
+                prior is not None
+                and previous is not None
+                and previous.boot_id == sample.boot_id
+                and previous.agent_session_id == sample.agent_session_id
+                and 0
+                < (sample.observed_at - previous.observed_at).total_seconds()
+                <= measured.max_gap_seconds
+            )
+            facts, oom_delta, kill_delta = oom_evidence(
+                sample, workload, prior if continuity else None
+            )
+            new_oom = continuity and oom_delta is not None and oom_delta > 0
+            new_kill = continuity and kill_delta is not None and kill_delta > 0
+            counter_valid = continuity and oom_delta is not None and kill_delta is not None
+            window = self.windows.setdefault(key, Window(configuration=measured))
+            if not continuity or window.configuration != measured:
+                window.opening = window.recovery = 0
+                window.configuration = measured
+            if incident is not None:
+                updated = incident.model_copy(deep=True)
+                updated.latest_evidence = facts
+                updated.observed_at = sample.observed_at
+                updated.evaluated_at = updated.updated_at = now
+                if new_oom or new_kill:
+                    window.recovery = 0
+                else:
+                    eligible_recovery = bool(
+                        counter_valid
+                        and oom_delta == 0
+                        and kill_delta == 0
+                        and workload.snapshot_stable
+                        and workload.usage_ratio is not None
+                        and workload.usage_ratio * 100 < measured.recovery_percent
+                    )
+                    window.recovery = window.recovery + 1 if eligible_recovery else 0
+                if window.recovery >= measured.consecutive_samples:
+                    updated.status = "resolved"
+                    updated.resolved_at = now
+                    self.active.pop(key)
+                    window.recovery = 0
+                else:
+                    self.active[key] = updated
+                self.reloaded.discard(updated.id)
+                changes.append(updated)
+                continue
+            window.recovery = 0
+            if not new_kill:
+                continue
+            opened = Incident(
+                id=uuid4(),
+                node_id=sample.node_id,
+                resource=resource,
+                rule="workload_oom",
+                severity=measured.severity,
+                diagnosis=(
+                    f"Workload {workload.cgroup_path} observed a new local OOM-kill event; "
+                    "the local counter proves a scoped kill but does not by itself prove which limit caused it"
+                ),
+                configuration=measured,
+                opening_evidence=facts,
+                latest_evidence=facts,
+                opened_at=now,
+                observed_at=sample.observed_at,
+                evaluated_at=now,
+                updated_at=now,
+                investigation_steps=[
+                    f"Inspect memory.current, memory.max, memory.swap.max, and memory.events.local for {workload.cgroup_path}",
+                    "Correlate exact scoped kernel-log lines when available; do not infer a victim from an unrelated PID",
+                    "Inspect bounded PID/start-time/RSS evidence and application logs for the recorded generation",
+                    "Stop only the owned workload while retaining the cgroup for three fresh recovery observations",
+                ],
+            )
+            self.active[key] = opened
+            changes.append(opened)
+        return changes
+
+
 class CompositeEvaluator:
     def __init__(self, active: list[Incident]) -> None:
         self.disk = DiskEvaluator([i for i in active if i.rule == "disk_block_exhaustion"])
         self.cpu = CpuEvaluator([i for i in active if i.rule == "cpu_saturation"])
+        self.oom = OomEvaluator([i for i in active if i.rule == "workload_oom"])
 
     @property
     def active(self) -> dict[tuple[str, str, str], Incident]:
         return {
             (incident.node_id, incident.rule, incident.resource): incident
-            for incident in [*self.disk.active.values(), *self.cpu.active.values()]
+            for incident in [
+                *self.disk.active.values(),
+                *self.cpu.active.values(),
+                *self.oom.active.values(),
+            ]
         }
 
     @property
     def reloaded(self) -> set[Any]:
-        return set(self.disk.reloaded) | set(self.cpu.reloaded)
+        return set(self.disk.reloaded) | set(self.cpu.reloaded) | set(self.oom.reloaded)
 
     def reset_node(self, node: str) -> None:
-        for evaluator in (self.disk, self.cpu):
+        for evaluator in (self.disk, self.cpu, self.oom):
             for key in list(evaluator.windows):
                 if key[0] == node:
                     evaluator.windows.pop(key)
@@ -264,6 +440,7 @@ class CompositeEvaluator:
         self.cpu.active = {
             (i.node_id, i.resource): i for i in records if i.rule == "cpu_saturation"
         }
+        self.oom.active = {(i.node_id, i.resource): i for i in records if i.rule == "workload_oom"}
         for node in affected:
             self.reset_node(node)
         self.disk.reloaded.update(
@@ -271,6 +448,9 @@ class CompositeEvaluator:
         )
         self.cpu.reloaded.update(
             i.id for i in records if i.rule == "cpu_saturation" and i.node_id in affected
+        )
+        self.oom.reloaded.update(
+            i.id for i in records if i.rule == "workload_oom" and i.node_id in affected
         )
 
     def evaluate(
@@ -280,8 +460,10 @@ class CompositeEvaluator:
         now: datetime,
         disk_config: DiskConfig,
         cpu_config: CpuConfig,
+        oom_config: OomConfig,
     ) -> list[Incident]:
         return [
             *self.disk.evaluate(sample, previous, now, disk_config),
             *self.cpu.evaluate(sample, previous, now, cpu_config),
+            *self.oom.evaluate(sample, previous, now, oom_config),
         ]

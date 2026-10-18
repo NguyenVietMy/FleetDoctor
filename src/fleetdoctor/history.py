@@ -21,6 +21,13 @@ HISTORY_METRICS = {
     "cpu_load_5m": "fleetdoctor_cpu_load_5m",
     "cpu_load_15m": "fleetdoctor_cpu_load_15m",
     "cpu_coverage_ratio": "fleetdoctor_cpu_coverage_ratio",
+    "host_memory_available_bytes": "fleetdoctor_host_memory_available_bytes",
+    "host_swap_free_bytes": "fleetdoctor_host_swap_free_bytes",
+    "host_pgmajfault_per_second": "fleetdoctor_host_pgmajfault_per_second",
+    "workload_memory_current_bytes": "fleetdoctor_workload_memory_current_bytes",
+    "workload_memory_usage_ratio": "fleetdoctor_workload_memory_usage_ratio",
+    "workload_oom_kill_total": "fleetdoctor_workload_memory_oom_kill_total",
+    "memory_coverage_ratio": "fleetdoctor_memory_coverage_ratio",
 }
 
 

@@ -247,7 +247,11 @@ def test_cpu_trigger_recovery_metrics_staleness_and_history_mapping() -> None:
     active = store.active()
     assert len(active) == 1 and active[0].rule == "cpu_saturation" and active[0].resource == "cpu"
     view = client.get("/nodes/node-a/metrics").json()
-    assert view["active_incident_counts"] == {"disk_block_exhaustion": 0, "cpu_saturation": 1}
+    assert view["active_incident_counts"] == {
+        "disk_block_exhaustion": 0,
+        "cpu_saturation": 1,
+        "workload_oom": 0,
+    }
     assert view["cpu"]["runnable_processes"] == 3
     metrics = client.get("/metrics").text
     assert 'fleetdoctor_cpu_busy_ratio{node="node-a"} 0.9' in metrics

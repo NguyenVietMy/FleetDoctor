@@ -17,7 +17,16 @@ from pydantic import SecretStr
 from fleetdoctor.collection import CollectionWorker
 from fleetdoctor.cpu import CpuCollectionWorker
 from fleetdoctor.delivery import DeliveryQueue, Outcome, send, uploader
-from fleetdoctor.schema import UNITS, UNITS_V2, CpuObservation, Filesystem, Sample
+from fleetdoctor.memory import MemoryCollectionWorker, validate_cgroup_paths
+from fleetdoctor.schema import (
+    UNITS,
+    UNITS_V2,
+    UNITS_V3,
+    CpuObservation,
+    Filesystem,
+    MemoryObservation,
+    Sample,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -42,17 +51,21 @@ def make_sample(
     filesystems: list[Filesystem],
     observed_at: datetime | None = None,
     cpu: CpuObservation | None = None,
+    memory: MemoryObservation | None = None,
 ) -> Sample:
+    if memory is not None and cpu is None:
+        raise ValueError("schema v3 memory samples require CPU telemetry")
     return Sample(
-        schema_version=2 if cpu is not None else 1,
+        schema_version=3 if memory is not None else (2 if cpu is not None else 1),
         node_id=node,
         boot_id=boot,
         agent_session_id=session,
         sequence=sequence,
         observed_at=observed_at or datetime.now(UTC),
-        units=UNITS_V2 if cpu is not None else UNITS,
+        units=UNITS_V3 if memory is not None else (UNITS_V2 if cpu is not None else UNITS),
         filesystems=filesystems,
         cpu=cpu,
+        memory=memory,
     )
 
 
@@ -72,6 +85,7 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
     session = uuid4()
     worker = CollectionWorker()
     cpu_worker = CpuCollectionWorker() if os.name == "posix" else None
+    memory_worker = MemoryCollectionWorker() if os.name == "posix" else None
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -88,11 +102,14 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
             once,
             stopped,
             cpu_worker=cpu_worker,
+            memory_worker=memory_worker,
         )
     finally:
         worker.close()
         if cpu_worker is not None:
             cpu_worker.close()
+        if memory_worker is not None:
+            memory_worker.close()
 
 
 async def collect_loop(
@@ -107,6 +124,7 @@ async def collect_loop(
     stopped: asyncio.Event,
     *,
     cpu_worker: CpuCollectionWorker | None = None,
+    memory_worker: MemoryCollectionWorker | None = None,
 ) -> None:
     """Also used by the service proof with an ordinary synthetic collection worker."""
     sequence = 0
@@ -140,8 +158,19 @@ async def collect_loop(
                     except asyncio.CancelledError:
                         await cpu_collection
                         raise
+                memory = None
+                if memory_worker is not None:
+                    cgroups = validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", ""))
+                    memory_collection = asyncio.create_task(
+                        asyncio.to_thread(memory_worker.collect, cgroups)
+                    )
+                    try:
+                        memory = await asyncio.shield(memory_collection)
+                    except asyncio.CancelledError:
+                        await memory_collection
+                        raise
                 sample = make_sample(
-                    node, boot, session, sequence, filesystems, observed_at, cpu=cpu
+                    node, boot, session, sequence, filesystems, observed_at, cpu=cpu, memory=memory
                 )
                 queue.enqueue(sample, datetime.now(UTC))
                 if once:
@@ -179,6 +208,7 @@ def main() -> None:
     if not token.get_secret_value() or not url.startswith("http://"):
         raise ValueError("configure a token and private-IP HTTP collector URL")
     configured_cpu_pids(os.getenv("FLEETDOCTOR_CPU_PIDS", ""))
+    validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", ""))
     make_sample(
         node,
         uuid4(),

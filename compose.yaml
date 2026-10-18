@@ -16,6 +16,8 @@ services:
       GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?run scripts/upgrade_env.py privately}
       FLEETDOCTOR_DISK_RULE: ${FLEETDOCTOR_DISK_RULE:-{}}
       FLEETDOCTOR_CPU_RULE: ${FLEETDOCTOR_CPU_RULE:-{}}
+      FLEETDOCTOR_OOM_RULE: ${FLEETDOCTOR_OOM_RULE:-{}}
+      FLEETDOCTOR_CGROUPS: ${FLEETDOCTOR_CGROUPS:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -26,9 +26,10 @@ from fleetdoctor.checkpoint import (
     sample_fingerprint,
 )
 from fleetdoctor.history import HISTORY_METRICS, HistoryClient, validate_range
-from fleetdoctor.incidents import CpuConfig, DiskConfig
+from fleetdoctor.incidents import CpuConfig, DiskConfig, OomConfig
+from fleetdoctor.memory import validate_cgroup_paths
 from fleetdoctor.rules import CompositeEvaluator
-from fleetdoctor.schema import FIELDS, Sample
+from fleetdoctor.schema import FIELDS, Sample, WorkloadMemoryObservation
 from fleetdoctor.store import IncidentStore, PostgresStore, StoreError, StoreSnapshot
 
 MAX_BODY = 65536
@@ -46,6 +47,16 @@ METRICS = {
 }
 
 
+def usable_workload_memory(value: WorkloadMemoryObservation) -> bool:
+    return (
+        value.snapshot_stable
+        and value.current_bytes is not None
+        and value.events_before is not None
+        and value.events is not None
+        and (value.max_bytes is not None or value.max_unlimited)
+    )
+
+
 class State:
     def __init__(
         self,
@@ -55,6 +66,8 @@ class State:
         store: IncidentStore,
         config: DiskConfig,
         cpu_config: CpuConfig | None = None,
+        oom_config: OomConfig | None = None,
+        cgroup_paths: tuple[str, ...] = (),
     ) -> None:
         self.nodes, self.paths, self.clock = nodes, paths, clock
         self.latest: dict[str, Sample] = {}
@@ -67,6 +80,7 @@ class State:
         self.published_checkpoints: dict[str, Checkpoint] = {}
         self.lock = Lock()
         self.store, self.config, self.cpu_config = store, config, cpu_config or CpuConfig()
+        self.oom_config, self.cgroup_paths = oom_config or OomConfig(), cgroup_paths
         snapshot = store.snapshot(set(nodes))
         self.evaluator = CompositeEvaluator(snapshot.active)
         for checkpoint in snapshot.checkpoints.values():
@@ -139,7 +153,9 @@ class State:
                 if sample.observed_at <= previous.observed_at:
                     return "superseded"
             staged = deepcopy(self.evaluator)
-            changes = staged.evaluate(sample, previous, now, self.config, self.cpu_config)
+            changes = staged.evaluate(
+                sample, previous, now, self.config, self.cpu_config, self.oom_config
+            )
             retired = list(self.retired[sample.node_id])
             if previous and identity != prev_identity:
                 retired.append(prev_identity)
@@ -185,12 +201,13 @@ class State:
             by_rule = (
                 {
                     rule: sum(i.node_id == node and i.rule == rule for i in active)
-                    for rule in ("disk_block_exhaustion", "cpu_saturation")
+                    for rule in ("disk_block_exhaustion", "cpu_saturation", "workload_oom")
                 }
                 if active is not None
                 else None
             )
             cpu = sample.cpu if sample else None
+            memory = sample.memory if sample else None
             cpu_coverage = {
                 "host_rates": "available"
                 if fresh and cpu is not None and cpu.busy_percent is not None
@@ -251,8 +268,29 @@ class State:
                 if sample
                 else {},
                 "cpu_coverage": cpu_coverage,
+                "memory_coverage": {
+                    "host": "available"
+                    if fresh and memory is not None and memory.host.total_bytes is not None
+                    else "unavailable",
+                    "kernel_logs": memory.kernel_log_coverage
+                    if fresh and memory is not None
+                    else "unavailable",
+                    "workloads": {
+                        path: (
+                            "available"
+                            if fresh
+                            and memory is not None
+                            and any(
+                                item.cgroup_path == path and usable_workload_memory(item)
+                                for item in memory.workloads
+                            )
+                            else "unavailable"
+                        )
+                        for path in self.cgroup_paths
+                    },
+                },
                 "sample": sample.model_dump(
-                    mode="json", exclude=set() if fresh else {"filesystems", "cpu"}
+                    mode="json", exclude=set() if fresh else {"filesystems", "cpu", "memory"}
                 )
                 if sample
                 else None,
@@ -260,6 +298,7 @@ class State:
                 if sample and fresh
                 else None,
                 "cpu": cpu.model_dump(mode="json") if cpu is not None and fresh else None,
+                "memory": memory.model_dump(mode="json") if memory is not None and fresh else None,
             }
 
 
@@ -271,13 +310,25 @@ def create_app(
     store: IncidentStore | None = None,
     config: DiskConfig | None = None,
     cpu_config: CpuConfig | None = None,
+    oom_config: OomConfig | None = None,
+    cgroup_paths: tuple[str, ...] = (),
 ) -> FastAPI:
     if not nodes or len(nodes) > 16 or any(len(v.get_secret_value()) < 32 for v in nodes.values()):
         raise ValueError("configure 1..16 node tokens of at least 32 characters")
     if not paths or len(paths) > 8 or len(set(paths)) != len(paths):
         raise ValueError("configure 1..8 unique filesystems")
+    validate_cgroup_paths(",".join(cgroup_paths))
     storage = store if store is not None else PostgresStore.environment()
-    state = State(nodes, paths, clock, storage, config or DiskConfig(), cpu_config or CpuConfig())
+    state = State(
+        nodes,
+        paths,
+        clock,
+        storage,
+        config or DiskConfig(),
+        cpu_config or CpuConfig(),
+        oom_config or OomConfig(),
+        cgroup_paths,
+    )
     app = FastAPI(title="FleetDoctor", version="0.1.0")
     app.state.fleet = state
     upstream = history or HistoryClient(os.getenv("PROMETHEUS_URL", "http://prometheus:9090"))
@@ -296,7 +347,9 @@ def create_app(
         return {
             "disk_rule": state.config.model_dump(),
             "cpu_rule": state.cpu_config.model_dump(),
+            "oom_rule": state.oom_config.model_dump(),
             "filesystems": list(paths),
+            "cgroups": list(cgroup_paths),
             "cadence_seconds": 5,
             "ingestion_checkpoint": {
                 "durable": True,
@@ -313,7 +366,7 @@ def create_app(
             "status": "ok",
             "storage": "incidents_and_ingestion_checkpoints_durable",
             "sample_history": "not_persisted",
-            "slice": "05",
+            "slice": "06",
         }
 
     @app.post("/ingest")
@@ -344,6 +397,14 @@ def create_app(
             raise HTTPException(403, "node identity not authorized")
         if {fs.mountpoint for fs in sample.filesystems} != set(paths):
             raise HTTPException(422, "sample must cover exactly the configured filesystems")
+        if sample.memory is not None:
+            reported_cgroups = {workload.cgroup_path for workload in sample.memory.workloads} | set(
+                sample.memory.workload_errors
+            )
+            if reported_cgroups != set(cgroup_paths):
+                raise HTTPException(
+                    422, "memory sample must cover exactly the configured workload cgroups"
+                )
         acknowledgement = request.headers.get(ACKNOWLEDGEMENT_HEADER)
         if acknowledgement is not None and acknowledgement != ACKNOWLEDGEMENT_VERSION:
             raise HTTPException(422, "unsupported acknowledgement version")
@@ -541,6 +602,100 @@ def create_app(
             ["node"],
             registry=registry,
         )
+        host_memory_gauges = {
+            "total_bytes": Gauge(
+                "fleetdoctor_host_memory_total_bytes",
+                "Host memory total",
+                ["node"],
+                registry=registry,
+            ),
+            "available_bytes": Gauge(
+                "fleetdoctor_host_memory_available_bytes",
+                "Host memory available",
+                ["node"],
+                registry=registry,
+            ),
+            "swap_total_bytes": Gauge(
+                "fleetdoctor_host_swap_total_bytes", "Host swap total", ["node"], registry=registry
+            ),
+            "swap_free_bytes": Gauge(
+                "fleetdoctor_host_swap_free_bytes", "Host swap free", ["node"], registry=registry
+            ),
+            "pgfault_per_second": Gauge(
+                "fleetdoctor_host_pgfault_per_second",
+                "Host page faults per second",
+                ["node"],
+                registry=registry,
+            ),
+            "pgmajfault_per_second": Gauge(
+                "fleetdoctor_host_pgmajfault_per_second",
+                "Host major page faults per second",
+                ["node"],
+                registry=registry,
+            ),
+            "swap_in_bytes_per_second": Gauge(
+                "fleetdoctor_host_swap_in_bytes_per_second",
+                "Host swap-in byte rate",
+                ["node"],
+                registry=registry,
+            ),
+            "swap_out_bytes_per_second": Gauge(
+                "fleetdoctor_host_swap_out_bytes_per_second",
+                "Host swap-out byte rate",
+                ["node"],
+                registry=registry,
+            ),
+        }
+        workload_memory_gauges = {
+            "current_bytes": Gauge(
+                "fleetdoctor_workload_memory_current_bytes",
+                "Configured cgroup memory usage",
+                ["node", "cgroup"],
+                registry=registry,
+            ),
+            "max_bytes": Gauge(
+                "fleetdoctor_workload_memory_max_bytes",
+                "Configured cgroup finite memory limit",
+                ["node", "cgroup"],
+                registry=registry,
+            ),
+            "usage_ratio": Gauge(
+                "fleetdoctor_workload_memory_usage_ratio",
+                "Configured cgroup memory usage ratio",
+                ["node", "cgroup"],
+                registry=registry,
+            ),
+            "swap_current_bytes": Gauge(
+                "fleetdoctor_workload_swap_current_bytes",
+                "Configured cgroup swap usage",
+                ["node", "cgroup"],
+                registry=registry,
+            ),
+            "swap_max_bytes": Gauge(
+                "fleetdoctor_workload_swap_max_bytes",
+                "Configured cgroup finite swap limit",
+                ["node", "cgroup"],
+                registry=registry,
+            ),
+            "oom": Gauge(
+                "fleetdoctor_workload_memory_oom_total",
+                "Cgroup-local cumulative OOM attempts",
+                ["node", "cgroup"],
+                registry=registry,
+            ),
+            "oom_kill": Gauge(
+                "fleetdoctor_workload_memory_oom_kill_total",
+                "Cgroup-local cumulative OOM kills",
+                ["node", "cgroup"],
+                registry=registry,
+            ),
+        }
+        memory_coverage_g = Gauge(
+            "fleetdoctor_memory_coverage_ratio",
+            "Configured memory sources available",
+            ["node", "scope"],
+            registry=registry,
+        )
         try:
             views = {node: state.view(node, include_counts=storage_ok) for node in nodes}
         except StoreError:
@@ -582,6 +737,34 @@ def create_app(
                     value = view["cpu"][field]
                     if value is not None:
                         gauge.labels(node).set(value / 100 if field.endswith("percent") else value)
+            memory = view["memory"]
+            memory_coverage_g.labels(node, "host").set(
+                int(view["memory_coverage"]["host"] == "available")
+            )
+            memory_coverage_g.labels(node, "kernel_logs").set(
+                int(view["memory_coverage"]["kernel_logs"] in ("available", "baseline"))
+            )
+            for cgroup in cgroup_paths:
+                memory_coverage_g.labels(node, cgroup).set(
+                    int(view["memory_coverage"]["workloads"].get(cgroup) == "available")
+                )
+            if memory is not None:
+                for field, gauge in host_memory_gauges.items():
+                    value = memory["host"][field]
+                    if value is not None:
+                        gauge.labels(node).set(value)
+                for workload in memory["workloads"]:
+                    cgroup = workload["cgroup_path"]
+                    if view["memory_coverage"]["workloads"].get(cgroup) != "available":
+                        continue
+                    for field, gauge in workload_memory_gauges.items():
+                        value = (
+                            workload["events"].get(field)
+                            if field in ("oom", "oom_kill") and workload["events"] is not None
+                            else workload.get(field)
+                        )
+                        if value is not None:
+                            gauge.labels(node, cgroup).set(value)
         return Response(
             generate_latest(registry), media_type="text/plain; version=0.0.4; charset=utf-8"
         )
@@ -596,4 +779,6 @@ def app_factory() -> FastAPI:
         tuple(os.getenv("FLEETDOCTOR_FILESYSTEMS", "/").split(",")),
         config=DiskConfig.model_validate_json(os.getenv("FLEETDOCTOR_DISK_RULE", "{}")),
         cpu_config=CpuConfig.model_validate_json(os.getenv("FLEETDOCTOR_CPU_RULE", "{}")),
+        oom_config=OomConfig.model_validate_json(os.getenv("FLEETDOCTOR_OOM_RULE", "{}")),
+        cgroup_paths=validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", "")),
     )

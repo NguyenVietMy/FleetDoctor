@@ -14,6 +14,7 @@ def create(
     collector_ip: str = "127.0.0.1",
     ports: tuple[int, int, int] = (8000, 9090, 3000),
     disk: bool = False,
+    cgroups: tuple[str, ...] = (),
 ) -> dict[str, str]:
     tokens = {node: secrets.token_urlsafe(32) for node in ("node-a", "node-b")}
     values = {
@@ -22,6 +23,7 @@ def create(
         "GRAFANA_PASSWORD": secrets.token_urlsafe(32),
         "GRAFANA_DB_PASSWORD": secrets.token_urlsafe(32),
         "FLEETDOCTOR_FILESYSTEMS": "/," + DISK_PATH if disk else "/",
+        "FLEETDOCTOR_CGROUPS": ",".join(cgroups),
         "COLLECTOR_BIND_IP": collector_ip,
         "COLLECTOR_PORT": str(ports[0]),
         "PROMETHEUS_PORT": str(ports[1]),

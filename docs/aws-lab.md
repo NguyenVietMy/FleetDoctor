@@ -69,6 +69,12 @@ Deploy the Task05-compatible collector before any v2 agent. Before a separately 
 
 The later measured gate runs five retained CPU scenarios across the monitored nodes, verifies the correct `node/cpu/cpu_saturation` incident from ordinary telemetry, confirms the reference node remains clear, and requires three unique fresh recovery observations after cleanup. Preserve failed attempts and cleanup failures. Stop if affinity, quota, credits, or steal prevent the declared host scope; do not tune thresholds during a measured batch. AWS start/SSH/workload execution remains a separate authorization gate.
 
+## Task06 workload OOM procedure
+
+Deploy the Task06 collector before a schema-v3 agent. Read [the workload OOM runbook](workload-oom.md). On the authorized target, prepare the unique delegated helper resource first, record its exact `leaf_path`, token, unit invocation and device/inode generation, configure that path in both the collector and target agent, restart the agent, and wait for a fresh empty-cgroup local-counter baseline. Confirm the target/reference agents and collector are outside the injection leaf and that the target has sufficient free memory. Never run the allocator in the agent, collector, SSH, or monitoring cgroup.
+
+The helper must show `Delegate=yes`, `OOMPolicy=continue`, `KillMode=control-group`, a supervisor subgroup, a 32–64MiB finite leaf limit, `memory.swap.max=0`, bounded tasks/CPU, an independent child deadline no longer than 180 seconds, and a supervisor lease no longer than 360 seconds. The measured harness requires the exact prepared generation, a real `memory.events.local:oom_kill` increment, a matching persisted incident, allocator death, retained empty leaf, three fresh below-80%/no-new-event observations, resolved incident, and exact-token release. Preserve helper status, raw counters, API evidence, report, source/config/environment hashes, and cleanup/expiry evidence. Repeat five retained runs across authorized nodes only in the later AWS gate; AWS/SSH execution and deployment remain separately authorized.
+
 ## Export and retire
 
 While the lab is running and SSH works:

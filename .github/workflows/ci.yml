@@ -24,8 +24,35 @@ jobs:
       - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task06-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/disk_helper_integration.py --output $RUNNER_TEMP/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/cpu_smoke.py --workers 2 --seconds 2 --output $RUNNER_TEMP/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
-      - run: sudo "$(command -v uv)" run python scripts/oom_smoke.py --output $RUNNER_TEMP/task06-oom-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
-      - run: sudo "$(command -v uv)" run python scripts/oom_helper_integration.py --output $RUNNER_TEMP/task06-oom-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - name: Prepare accessible native OOM runtime
+        run: |
+          native_root="$(mktemp -d /tmp/fleetdoctor-oom-ci.XXXXXX)"
+          echo "FLEETDOCTOR_NATIVE_CI=$native_root" >> "$GITHUB_ENV"
+          chmod 755 "$native_root"
+          # Clone tracked source without copying checkout credentials or shared objects.
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$native_root/worktree"
+          sudo chown -R root:root "$native_root"
+          sudo env UV_CACHE_DIR="$native_root/cache" "$(command -v uv)" sync \
+            --project "$native_root/worktree" --python /usr/bin/python3 \
+            --no-managed-python --locked --all-extras
+          sudo -u nobody "$native_root/worktree/.venv/bin/python" -c 'import sys; print(sys.executable)'
+          sudo -u nobody test -r "$native_root/worktree/deploy/memory_resource.py"
+      - name: Prove native workload OOM
+        run: |
+          cd "$FLEETDOCTOR_NATIVE_CI/worktree"
+          sudo .venv/bin/python scripts/oom_smoke.py --output $RUNNER_TEMP/task06-oom-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - name: Prove native OOM helper lifecycle
+        run: |
+          cd "$FLEETDOCTOR_NATIVE_CI/worktree"
+          sudo .venv/bin/python scripts/oom_helper_integration.py --output $RUNNER_TEMP/task06-oom-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - name: Remove native OOM runtime
+        if: always()
+        run: |
+          if [ -n "${FLEETDOCTOR_NATIVE_CI:-}" ]; then
+            native_root="$(realpath -e -- "$FLEETDOCTOR_NATIVE_CI")"
+            [[ "$native_root" == /tmp/fleetdoctor-oom-ci.* && "$(dirname -- "$native_root")" == /tmp ]]
+            sudo rm -rf -- "$native_root"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

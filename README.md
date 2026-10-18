@@ -1,6 +1,6 @@
 # FleetDoctor
 
-FleetDoctor monitors a small Linux fleet and produces evidence-supported resource diagnoses. **Tasks 01 and 02 implement filesystem collection, healthy-fleet visibility and durable disk incident lifecycle.** Task02 passed local checks and two AWS functional lifecycles on 2026-10-11; see [Task02 evidence](docs/task02-evidence.md) for the frozen inspection record and verification limits. Task03 adds bounded outage delivery and reporting. Task04 adds durable bounded ingestion checkpoints and restart recovery; [Task04 evidence](docs/task04-evidence.md) separates builder proof from independent and live gates. Task05 adds strict v2 host CPU telemetry and the CPU saturation lifecycle; see the [CPU runbook](docs/cpu-saturation.md) and [Task05 evidence status](docs/task05-evidence.md). The [PRD](<FleetDoctor PRD.md>) owns the full project's requirements.
+FleetDoctor monitors a small Linux fleet and produces evidence-supported resource diagnoses. **Tasks 01 and 02 implement filesystem collection, healthy-fleet visibility and durable disk incident lifecycle.** Task02 passed local checks and two AWS functional lifecycles on 2026-10-11; see [Task02 evidence](docs/task02-evidence.md) for the frozen inspection record and verification limits. Task03 adds bounded outage delivery and reporting. Task04 adds durable bounded ingestion checkpoints and restart recovery; [Task04 evidence](docs/task04-evidence.md) separates builder proof from independent and live gates. Task05 adds strict v2 host CPU telemetry and CPU saturation. Task06 adds strict v3 host/workload memory telemetry and a generation-scoped workload-OOM lifecycle; see the [OOM runbook](docs/workload-oom.md) and [Task06 evidence status](docs/task06-evidence.md). The [PRD](<FleetDoctor PRD.md>) owns the full project's requirements.
 
 ```mermaid
 flowchart LR
@@ -29,6 +29,10 @@ uv run python scripts/integration.py --output <external-path>/integration.json
 uv run python scripts/disk_helper_integration.py --output <external-path>/disk-helper.json
 # Native Linux/WSL only; deliberately limited and not a saturation claim:
 uv run python scripts/cpu_smoke.py --workers 2 --seconds 5 --output <external-path>/cpu-smoke.json
+# Root Linux with systemd+cgroup v2 and Docker; real bounded kernel OOM:
+sudo $(command -v uv) run python scripts/oom_smoke.py --output <external-path>/oom-smoke.json
+# Root Linux with systemd+cgroup v2; independent expiry/interruption/repeat cleanup:
+sudo $(command -v uv) run python scripts/oom_helper_integration.py --output <external-path>/oom-helper.json
 ```
 
 The ordinary stack has no synthetic agents. Host agents are installed on Linux through [the AWS runbook](docs/aws-lab.md). The integration command creates a separate unique project and secrets, sends fixture samples for two nodes, checks atomic PostgreSQL checkpoints, collector restart, API/history/dashboard/persistent stores and Linux statvfs, then removes **only its own** containers/volumes. Its evidence is explicitly a synthetic service test. The same command also runs a 25-second node-a-only outage through production agent transport, with node-b continuity and real Prometheus gap assertions.
@@ -51,9 +55,17 @@ terraform -chdir=infra/aws init -backend=false -lockfile=readonly
 terraform -chdir=infra/aws validate
 uv run python scripts/integration.py --output <external-path>/integration.json
 uv run python scripts/disk_helper_integration.py --output <external-path>/disk-helper.json
+sudo $(command -v uv) run python scripts/oom_helper_integration.py --output <external-path>/oom-helper.json
+sudo $(command -v uv) run python scripts/oom_smoke.py --output <external-path>/oom-smoke.json
 ```
 
-Static checking targets Linux. Fixture tests also run on Windows; the isolated Docker check exercises actual Linux statvfs. CI requires no AWS credentials or live model calls. The Task01 through Task05 workflow covers delivered behavior; it does not claim remote CI, rendered dashboard inspection, AWS CPU saturation, the full future CI gate, or the one-hour healthy baseline/agent overhead checks from task 16. The six remaining diagnosis types, calibrated scenario batches, postmortem drafting and workload traces remain later tickets.
+Static checking targets Linux. Fixture tests also run on Windows; the isolated Docker check exercises actual Linux statvfs and synthetic v3 service behavior. CI requires no AWS credentials or live model calls. Task06's dedicated Linux proof creates a bounded delegated cgroup, triggers a real kernel OOM kill, uses production memory collection and PostgreSQL/API persistence, resolves from three fresh observations, and removes only its owned unit/container. It does not claim AWS calibration, the five-run scenario gate, a healthy hour, overhead acceptance, or rendered-dashboard approval. Five diagnosis types, calibrated scenario batches, postmortem drafting and workload traces remain later tickets.
+
+## Workload OOM diagnosis
+
+New Linux agents emit schema v3, containing the unchanged v2 CPU envelope plus host memory/swap, page-fault/swap rates, and at most four configured exact cgroup-v2 workloads. Deploy the compatible collector before a v3 agent. A workload's first generation-specific local counter observation establishes a baseline; the next positive `memory.events.local:oom_kill` delta opens `workload_oom` immediately. Kernel logs are bounded optional corroboration. Three fresh, stable observations below 80% of a finite `memory.max`, with zero new local `oom` and `oom_kill` deltas, resolve the incident. Unlimited, missing, reset, removed, replaced, stale, or unstable sources cannot recover it.
+
+The incident resource key contains the display path, boot identity, device, and inode. A removed generation stays truthfully active/stale while a replacement generation can open independently. Prometheus labels use only node and configured cgroup path; PID, command, generation, and log text remain structured API evidence. See [docs/workload-oom.md](docs/workload-oom.md) before preparing or running the bounded helper.
 
 ## CPU saturation diagnosis
 

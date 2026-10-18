@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+STATE_ROOT = Path("/run/fleetdoctor-oom")
+
 
 def command(argv: list[str], timeout: float = 30) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, check=False, capture_output=True, text=True, timeout=timeout)
@@ -67,10 +69,15 @@ def signal_prelaunch(script: Path, token: str) -> str:
 
 
 def wait_expired(script: Path, token: str, deadline: float) -> dict[str, Any]:
+    state = STATE_ROOT / (token + ".json")
+    gate = STATE_ROOT / (token + ".gate")
     while time.monotonic() < deadline:
-        value = helper(script, "status", token)
-        if value.get("state") == "absent":
-            return value
+        # The supervisor can remove the cgroup before unlinking trusted state.
+        # Wait for cleanup before asking the fail-closed status API about it.
+        if not state.exists() and not gate.exists():
+            value = helper(script, "status", token)
+            if value.get("state") == "absent":
+                return value
         time.sleep(0.1)
     raise TimeoutError("owned transient resource did not expire after controller-independent limit")
 

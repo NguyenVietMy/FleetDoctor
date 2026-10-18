@@ -5,9 +5,61 @@ from types import SimpleNamespace
 from typing import Any
 
 import chaos_oom
+import oom_helper_integration
 import oom_smoke
 import psycopg
 import pytest
+
+
+@pytest.mark.parametrize("pending_suffix", [".json", ".gate"])
+def test_helper_expiry_waits_for_automatic_cleanup_before_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending_suffix: str
+) -> None:
+    token = "a" * 32
+    pending = tmp_path / (token + pending_suffix)
+    pending.write_text("pending cleanup")
+    clock = [0.0]
+    calls: list[str] = []
+
+    def status(*args: object) -> dict[str, Any]:
+        assert not pending.exists(), "status polled a cgroup during automatic teardown"
+        calls.append("status")
+        return {"state": "absent"}
+
+    def sleep(seconds: float) -> None:
+        clock[0] += seconds
+        pending.unlink()
+
+    monkeypatch.setattr(oom_helper_integration, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(oom_helper_integration, "helper", status)
+    monkeypatch.setattr("oom_helper_integration.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("oom_helper_integration.time.sleep", sleep)
+
+    assert oom_helper_integration.wait_expired(Path("helper"), token, 1.0) == {"state": "absent"}
+    assert calls == ["status"]
+
+
+def test_helper_expiry_still_times_out_when_automatic_cleanup_stalls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "b" * 32
+    pending = tmp_path / (token + ".json")
+    pending.write_text("cleanup stalled")
+    clock = [0.0]
+
+    def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    monkeypatch.setattr(oom_helper_integration, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(
+        oom_helper_integration, "helper", lambda *args: pytest.fail("pending state must not pass")
+    )
+    monkeypatch.setattr("oom_helper_integration.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("oom_helper_integration.time.sleep", sleep)
+
+    with pytest.raises(TimeoutError, match="controller-independent limit"):
+        oom_helper_integration.wait_expired(Path("helper"), token, 0.25)
+    assert pending.exists()
 
 
 def test_native_smoke_waits_for_tcp_and_authenticated_dsn(

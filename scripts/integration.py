@@ -19,6 +19,9 @@ from create_env import create
 from integration_cpu import prove as prove_cpu
 from integration_disk import PATH as DISK_PATH
 from integration_disk import prove
+from integration_oom import CGROUP as OOM_CGROUP
+from integration_oom import MISSING_CGROUP as OOM_MISSING_CGROUP
+from integration_oom import prove as prove_oom
 from integration_outage import prove_outage
 
 from fleetdoctor.agent import make_sample
@@ -37,7 +40,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    project = "fd05-" + uuid4().hex[:10]
+    project = "fd06-" + uuid4().hex[:10]
     ports = (free_port(), free_port(), free_port())
     started = datetime.now(UTC)
     evidence: dict[str, Any] = {
@@ -56,7 +59,12 @@ def main() -> None:
     thread: threading.Thread | None = None
     with tempfile.TemporaryDirectory(prefix="fleetdoctor-integration-") as temp:
         env_file = Path(temp) / "test.env"
-        values = create(env_file, ports=ports, disk=True)
+        values = create(
+            env_file,
+            ports=ports,
+            disk=True,
+            cgroups=(OOM_CGROUP, OOM_MISSING_CGROUP),
+        )
         tokens: dict[str, str] = json.loads(values["FLEETDOCTOR_NODE_TOKENS"])
         base = [
             "docker",
@@ -333,6 +341,8 @@ def main() -> None:
             prove(api, grafana, values, compose, evidence["disk_incidents"])
             evidence["cpu_incidents"] = {}
             prove_cpu(api, prom, grafana, values, compose, evidence["cpu_incidents"])
+            evidence["oom_incidents"] = {}
+            prove_oom(api, prom, grafana, values, compose, evidence["oom_incidents"])
             evidence["outage_and_replay"] = {}
             asyncio.run(prove_outage(api, prom, grafana, values, evidence["outage_and_replay"]))
             evidence["source_after"] = source_manifest()

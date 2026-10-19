@@ -31,6 +31,7 @@ def helper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
         ("RESOURCE", tmp_path / "resource.json"),
         ("IDENTITY", tmp_path / "identity.json"),
         ("LEASE", tmp_path / "disk-lease.json"),
+        ("INODE_LEASE", tmp_path / "inode-lease.json"),
     ):
         monkeypatch.setattr(module, key, value)
     mapping = {
@@ -277,6 +278,13 @@ def test_existing_lease_or_filler_is_never_deleted(helper: ModuleType) -> None:
     assert filler.read_text() == "unowned" and not helper.LEASE.exists()
 
 
+def test_inode_lease_excludes_disk_start(helper: ModuleType) -> None:
+    helper.INODE_LEASE.write_text('{"token":"other"}')
+    with pytest.raises(ValueError, match="inode injection lease"):
+        helper.start(uuid4().hex, 10)
+    assert helper.INODE_LEASE.read_text() == '{"token":"other"}'
+
+
 def test_cleanup_rejects_wrong_inode_and_mapping(
     helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -398,6 +406,7 @@ def test_fresh_preparation_rollback(
     if failure == "save":
         assert any(cmd[0] == "umount" for cmd in commands)
         assert any(cmd[:2] == ("losetup", "--detach") for cmd in commands)
+        assert any(cmd[:6] == ("mkfs.ext4", "-F", "-m", "0", "-N", "256") for cmd in commands)
 
 
 def test_installer_exit_trap_removes_staged_credentials_on_hash_failure(tmp_path: Path) -> None:

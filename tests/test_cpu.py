@@ -249,6 +249,7 @@ def test_cpu_trigger_recovery_metrics_staleness_and_history_mapping() -> None:
     view = client.get("/nodes/node-a/metrics").json()
     assert view["active_incident_counts"] == {
         "disk_block_exhaustion": 0,
+        "inode_exhaustion": 0,
         "cpu_saturation": 1,
         "workload_oom": 0,
     }

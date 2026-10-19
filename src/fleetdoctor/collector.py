@@ -26,7 +26,7 @@ from fleetdoctor.checkpoint import (
     sample_fingerprint,
 )
 from fleetdoctor.history import HISTORY_METRICS, HistoryClient, validate_range
-from fleetdoctor.incidents import CpuConfig, DiskConfig, OomConfig
+from fleetdoctor.incidents import CpuConfig, DiskConfig, InodeConfig, OomConfig
 from fleetdoctor.memory import validate_cgroup_paths
 from fleetdoctor.rules import CompositeEvaluator
 from fleetdoctor.schema import FIELDS, Sample, WorkloadMemoryObservation
@@ -65,6 +65,7 @@ class State:
         clock: Callable[[], datetime],
         store: IncidentStore,
         config: DiskConfig,
+        inode_config: InodeConfig | None = None,
         cpu_config: CpuConfig | None = None,
         oom_config: OomConfig | None = None,
         cgroup_paths: tuple[str, ...] = (),
@@ -79,7 +80,11 @@ class State:
         }
         self.published_checkpoints: dict[str, Checkpoint] = {}
         self.lock = Lock()
-        self.store, self.config, self.cpu_config = store, config, cpu_config or CpuConfig()
+        self.store, self.config = store, config
+        self.inode_config, self.cpu_config = (
+            inode_config or InodeConfig(),
+            cpu_config or CpuConfig(),
+        )
         self.oom_config, self.cgroup_paths = oom_config or OomConfig(), cgroup_paths
         snapshot = store.snapshot(set(nodes))
         self.evaluator = CompositeEvaluator(snapshot.active)
@@ -154,7 +159,13 @@ class State:
                     return "superseded"
             staged = deepcopy(self.evaluator)
             changes = staged.evaluate(
-                sample, previous, now, self.config, self.cpu_config, self.oom_config
+                sample,
+                previous,
+                now,
+                self.config,
+                self.inode_config,
+                self.cpu_config,
+                self.oom_config,
             )
             retired = list(self.retired[sample.node_id])
             if previous and identity != prev_identity:
@@ -201,7 +212,12 @@ class State:
             by_rule = (
                 {
                     rule: sum(i.node_id == node and i.rule == rule for i in active)
-                    for rule in ("disk_block_exhaustion", "cpu_saturation", "workload_oom")
+                    for rule in (
+                        "disk_block_exhaustion",
+                        "inode_exhaustion",
+                        "cpu_saturation",
+                        "workload_oom",
+                    )
                 }
                 if active is not None
                 else None
@@ -241,6 +257,20 @@ class State:
                     and sample
                     and any(
                         fs.mountpoint == path and fs.block_usage_percent is not None
+                        for fs in sample.filesystems
+                    )
+                    else "unavailable"
+                    for path in self.paths
+                },
+                "inode_diagnosis_coverage": {
+                    path: "available"
+                    if fresh
+                    and sample
+                    and any(
+                        fs.mountpoint == path
+                        and fs.inode_usage_percent is not None
+                        and fs.block_usage_percent is not None
+                        and fs.available_bytes is not None
                         for fs in sample.filesystems
                     )
                     else "unavailable"
@@ -309,6 +339,7 @@ def create_app(
     history: HistoryClient | None = None,
     store: IncidentStore | None = None,
     config: DiskConfig | None = None,
+    inode_config: InodeConfig | None = None,
     cpu_config: CpuConfig | None = None,
     oom_config: OomConfig | None = None,
     cgroup_paths: tuple[str, ...] = (),
@@ -325,6 +356,7 @@ def create_app(
         clock,
         storage,
         config or DiskConfig(),
+        inode_config or InodeConfig(),
         cpu_config or CpuConfig(),
         oom_config or OomConfig(),
         cgroup_paths,
@@ -346,6 +378,17 @@ def create_app(
         require_storage()
         return {
             "disk_rule": state.config.model_dump(),
+            "inode_rule": state.inode_config.model_copy(
+                update={
+                    "block_guard_percent": min(
+                        state.inode_config.block_guard_percent, state.config.trigger_percent
+                    )
+                }
+            ).model_dump(),
+            "inode_rule_requested_block_guard_percent": state.inode_config.block_guard_percent,
+            "effective_inode_block_guard_percent": min(
+                state.inode_config.block_guard_percent, state.config.trigger_percent
+            ),
             "cpu_rule": state.cpu_config.model_dump(),
             "oom_rule": state.oom_config.model_dump(),
             "filesystems": list(paths),
@@ -366,7 +409,7 @@ def create_app(
             "status": "ok",
             "storage": "incidents_and_ingestion_checkpoints_durable",
             "sample_history": "not_persisted",
-            "slice": "06",
+            "slice": "07",
         }
 
     @app.post("/ingest")
@@ -537,6 +580,12 @@ def create_app(
         coverage = Gauge(
             "fleetdoctor_filesystem_coverage_ratio",
             "Fraction of available filesystem fields; zero if not fresh",
+            ["node", "filesystem"],
+            registry=registry,
+        )
+        inode_coverage = Gauge(
+            "fleetdoctor_inode_diagnosis_coverage_ratio",
+            "Required inode diagnosis sources available",
             ["node", "filesystem"],
             registry=registry,
         )
@@ -717,6 +766,9 @@ def create_app(
                 coverage.labels(node, path).set(
                     len(available) / len(FIELDS) if view["fresh"] else 0
                 )
+                inode_coverage.labels(node, path).set(
+                    int(view["inode_diagnosis_coverage"].get(path) == "available")
+                )
             for fs in view["filesystems"] or []:
                 for field, gauge in gauges.items():
                     value = fs[field]
@@ -778,6 +830,7 @@ def app_factory() -> FastAPI:
         {node: SecretStr(token) for node, token in raw.items()},
         tuple(os.getenv("FLEETDOCTOR_FILESYSTEMS", "/").split(",")),
         config=DiskConfig.model_validate_json(os.getenv("FLEETDOCTOR_DISK_RULE", "{}")),
+        inode_config=InodeConfig.model_validate_json(os.getenv("FLEETDOCTOR_INODE_RULE", "{}")),
         cpu_config=CpuConfig.model_validate_json(os.getenv("FLEETDOCTOR_CPU_RULE", "{}")),
         oom_config=OomConfig.model_validate_json(os.getenv("FLEETDOCTOR_OOM_RULE", "{}")),
         cgroup_paths=validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", "")),

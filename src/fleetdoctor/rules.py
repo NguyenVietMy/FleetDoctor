@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from fleetdoctor.incidents import CpuConfig, DiskConfig, Incident, OomConfig
+from fleetdoctor.incidents import CpuConfig, DiskConfig, Incident, InodeConfig, OomConfig
 from fleetdoctor.schema import Filesystem, Sample, WorkloadMemoryObservation
 
 
@@ -29,7 +29,8 @@ def evidence(sample: Sample, fs: Filesystem) -> dict[str, Any]:
 class Window:
     opening: int = 0
     recovery: int = 0
-    configuration: DiskConfig | CpuConfig | OomConfig | None = None
+    configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | None = None
+    guard_percent: float | None = None
 
 
 class DiskEvaluator:
@@ -111,6 +112,136 @@ class DiskEvaluator:
                     self.active[key] = incident
                     window.opening = 0
                     changes.append(incident)
+        return changes
+
+
+def inode_evidence(
+    sample: Sample, fs: Filesystem, effective_block_guard_percent: float
+) -> dict[str, Any]:
+    return {
+        "node_id": sample.node_id,
+        "boot_id": str(sample.boot_id),
+        "agent_session_id": str(sample.agent_session_id),
+        "sequence": sample.sequence,
+        "observed_at": sample.observed_at.isoformat(),
+        "inode_available": fs.inode_usage_percent is not None,
+        "block_available": fs.block_usage_percent is not None and fs.available_bytes is not None,
+        "effective_block_guard_percent": effective_block_guard_percent,
+        "filesystem": fs.model_dump(mode="json"),
+        "coverage": {
+            "inode": "available" if fs.inode_usage_percent is not None else "unavailable",
+            "block_guard": "available"
+            if fs.block_usage_percent is not None and fs.available_bytes is not None
+            else "unavailable",
+            "errors": fs.errors,
+        },
+    }
+
+
+class InodeEvaluator:
+    def __init__(self, active: list[Incident]) -> None:
+        self.active = {(incident.node_id, incident.resource): incident for incident in active}
+        self.windows: dict[tuple[str, str], Window] = {}
+        self.reloaded = {incident.id for incident in active}
+
+    def evaluate(
+        self,
+        sample: Sample,
+        previous: Sample | None,
+        now: datetime,
+        config: InodeConfig,
+        disk_config: DiskConfig,
+    ) -> list[Incident]:
+        changes: list[Incident] = []
+        for fs in sample.filesystems:
+            key = sample.node_id, fs.mountpoint
+            incident = self.active.get(key)
+            measured = (
+                incident.configuration
+                if incident
+                else config.model_copy(
+                    update={
+                        "block_guard_percent": min(
+                            config.block_guard_percent, disk_config.trigger_percent
+                        )
+                    }
+                )
+            )
+            assert isinstance(measured, InodeConfig)
+            effective_guard = measured.block_guard_percent
+            reset = previous is None or (
+                previous.boot_id != sample.boot_id
+                or previous.agent_session_id != sample.agent_session_id
+                or (sample.observed_at - previous.observed_at).total_seconds()
+                > measured.max_gap_seconds
+            )
+            window = self.windows.setdefault(key, Window())
+            if reset or window.configuration != measured or window.guard_percent != effective_guard:
+                window.opening = window.recovery = 0
+                window.configuration = measured
+                window.guard_percent = effective_guard
+            inode_usage = fs.inode_usage_percent
+            facts = inode_evidence(sample, fs, effective_guard)
+            if incident:
+                window.opening = 0
+                window.recovery = (
+                    window.recovery + 1
+                    if inode_usage is not None and inode_usage < measured.recovery_percent
+                    else 0
+                )
+                updated = incident.model_copy(deep=True)
+                updated.latest_evidence = facts
+                updated.observed_at = sample.observed_at
+                updated.evaluated_at = updated.updated_at = now
+                if window.recovery >= measured.consecutive_samples:
+                    updated.status = "resolved"
+                    updated.resolved_at = now
+                    self.active.pop(key)
+                    window.recovery = 0
+                else:
+                    self.active[key] = updated
+                self.reloaded.discard(updated.id)
+                changes.append(updated)
+                continue
+            window.recovery = 0
+            opening = (
+                inode_usage is not None
+                and fs.block_usage_percent is not None
+                and fs.available_bytes is not None
+                and fs.available_bytes > 0
+                and inode_usage >= measured.trigger_percent
+                and fs.block_usage_percent < effective_guard
+            )
+            window.opening = window.opening + 1 if opening else 0
+            if window.opening < measured.consecutive_samples:
+                continue
+            opened = Incident(
+                id=uuid4(),
+                node_id=sample.node_id,
+                resource=fs.mountpoint,
+                rule="inode_exhaustion",
+                severity=measured.severity,
+                diagnosis=(
+                    f"Filesystem {fs.mountpoint} has exhausted workload inodes while block "
+                    "space remains available"
+                ),
+                configuration=measured,
+                opening_evidence=facts,
+                latest_evidence=facts,
+                opened_at=now,
+                observed_at=sample.observed_at,
+                evaluated_at=now,
+                updated_at=now,
+                investigation_steps=[
+                    f"Confirm df -i -- {fs.mountpoint} and df -B1 -- {fs.mountpoint}",
+                    "Verify the mount/device identity with findmnt before changing files",
+                    "Inspect bounded known workload directories for file counts; statvfs does not identify a causal directory",
+                    "Remove only owned expendable files and require fresh inode usage below recovery threshold",
+                ],
+            )
+            self.active[key] = opened
+            window.opening = 0
+            changes.append(opened)
         return changes
 
 
@@ -409,6 +540,7 @@ class OomEvaluator:
 class CompositeEvaluator:
     def __init__(self, active: list[Incident]) -> None:
         self.disk = DiskEvaluator([i for i in active if i.rule == "disk_block_exhaustion"])
+        self.inode = InodeEvaluator([i for i in active if i.rule == "inode_exhaustion"])
         self.cpu = CpuEvaluator([i for i in active if i.rule == "cpu_saturation"])
         self.oom = OomEvaluator([i for i in active if i.rule == "workload_oom"])
 
@@ -418,6 +550,7 @@ class CompositeEvaluator:
             (incident.node_id, incident.rule, incident.resource): incident
             for incident in [
                 *self.disk.active.values(),
+                *self.inode.active.values(),
                 *self.cpu.active.values(),
                 *self.oom.active.values(),
             ]
@@ -425,10 +558,15 @@ class CompositeEvaluator:
 
     @property
     def reloaded(self) -> set[Any]:
-        return set(self.disk.reloaded) | set(self.cpu.reloaded) | set(self.oom.reloaded)
+        return (
+            set(self.disk.reloaded)
+            | set(self.inode.reloaded)
+            | set(self.cpu.reloaded)
+            | set(self.oom.reloaded)
+        )
 
     def reset_node(self, node: str) -> None:
-        for evaluator in (self.disk, self.cpu, self.oom):
+        for evaluator in (self.disk, self.inode, self.cpu, self.oom):
             for key in list(evaluator.windows):
                 if key[0] == node:
                     evaluator.windows.pop(key)
@@ -436,6 +574,9 @@ class CompositeEvaluator:
     def replace_active(self, records: list[Incident], affected: set[str]) -> None:
         self.disk.active = {
             (i.node_id, i.resource): i for i in records if i.rule == "disk_block_exhaustion"
+        }
+        self.inode.active = {
+            (i.node_id, i.resource): i for i in records if i.rule == "inode_exhaustion"
         }
         self.cpu.active = {
             (i.node_id, i.resource): i for i in records if i.rule == "cpu_saturation"
@@ -445,6 +586,9 @@ class CompositeEvaluator:
             self.reset_node(node)
         self.disk.reloaded.update(
             i.id for i in records if i.rule == "disk_block_exhaustion" and i.node_id in affected
+        )
+        self.inode.reloaded.update(
+            i.id for i in records if i.rule == "inode_exhaustion" and i.node_id in affected
         )
         self.cpu.reloaded.update(
             i.id for i in records if i.rule == "cpu_saturation" and i.node_id in affected
@@ -459,11 +603,13 @@ class CompositeEvaluator:
         previous: Sample | None,
         now: datetime,
         disk_config: DiskConfig,
+        inode_config: InodeConfig,
         cpu_config: CpuConfig,
         oom_config: OomConfig,
     ) -> list[Incident]:
         return [
             *self.disk.evaluate(sample, previous, now, disk_config),
+            *self.inode.evaluate(sample, previous, now, inode_config, disk_config),
             *self.cpu.evaluate(sample, previous, now, cpu_config),
             *self.oom.evaluate(sample, previous, now, oom_config),
         ]

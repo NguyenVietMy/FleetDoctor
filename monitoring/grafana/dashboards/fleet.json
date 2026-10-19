@@ -144,7 +144,7 @@
     },
     {
       "id": 20,
-      "title": "Disk, CPU, and OOM incident lifecycle",
+      "title": "Disk, inode, CPU, and OOM incident lifecycle",
       "type": "table",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -160,7 +160,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT id::text, node_id, resource, rule, severity, status, opened_at, observed_at, updated_at, resolved_at, (evidence_reloaded OR now()-observed_at > interval '15 seconds' OR observed_at-now() > interval '2 seconds') AS evidence_stale, CASE rule WHEN 'cpu_saturation' THEN (record->'latest_evidence'->>'cpu_available')::boolean WHEN 'workload_oom' THEN (record->'latest_evidence'->>'memory_available')::boolean ELSE (record->'latest_evidence'->>'block_available')::boolean END AS evidence_available FROM incidents WHERE status ~ '${status:raw}' ORDER BY opened_at DESC,id DESC LIMIT 100",
+          "rawSql": "SELECT id::text, node_id, resource, rule, severity, status, opened_at, observed_at, updated_at, resolved_at, (evidence_reloaded OR now()-observed_at > interval '15 seconds' OR observed_at-now() > interval '2 seconds') AS evidence_stale, CASE rule WHEN 'cpu_saturation' THEN (record->'latest_evidence'->>'cpu_available')::boolean WHEN 'workload_oom' THEN (record->'latest_evidence'->>'memory_available')::boolean WHEN 'inode_exhaustion' THEN (record->'latest_evidence'->>'inode_available')::boolean ELSE (record->'latest_evidence'->>'block_available')::boolean END AS evidence_available FROM incidents WHERE status ~ '${status:raw}' ORDER BY opened_at DESC,id DESC LIMIT 100",
           "editorMode": "code"
         }
       ],
@@ -183,7 +183,7 @@
     },
     {
       "id": 21,
-      "title": "Disk, CPU, and OOM evidence and investigation steps",
+      "title": "Disk, inode, CPU, and OOM evidence and investigation steps",
       "type": "table",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -417,6 +417,47 @@
       "gridPos": {"x": 12, "y": 80, "w": 12, "h": 8},
       "targets": [{"expr": "fleetdoctor_memory_coverage_ratio", "refId": "A", "legendFormat": "{{node}} {{scope}}"}],
       "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 50,
+      "title": "Inode usage by filesystem",
+      "description": "Fresh statvfs inode usage; missing counters remain absent.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 88, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_filesystem_inode_usage_ratio", "refId": "A", "legendFormat": "{{node}} {{filesystem}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 51,
+      "title": "Inode free and total counts",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 88, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "fleetdoctor_filesystem_inodes_free", "refId": "A", "legendFormat": "free {{node}} {{filesystem}}"},
+        {"expr": "fleetdoctor_filesystem_inodes_total", "refId": "B", "legendFormat": "total {{node}} {{filesystem}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 52,
+      "title": "Inode diagnosis coverage",
+      "description": "Both inode counters and the opening block guard are available and fresh.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 96, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_inode_diagnosis_coverage_ratio", "refId": "A", "legendFormat": "{{node}} {{filesystem}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 53,
+      "title": "Active inode incidents",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 96, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_active_incidents{rule=\"inode_exhaustion\"}", "refId": "A", "legendFormat": "{{node}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
     }
   ],
   "templating": {

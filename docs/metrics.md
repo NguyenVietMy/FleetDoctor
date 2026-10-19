@@ -16,6 +16,12 @@ Zero denominators, invalid counters, unreadable paths and collection deadlines p
 
 Schema v1 retains its exact historical filesystem JSON and fingerprint shape. Schema v2 adds a required CPU envelope and exact CPU units. Schema v3 requires the unchanged CPU envelope plus memory units and a memory envelope; deploy the compatible collector before newer agents. Every sample includes node ID, boot UUID, new agent-session UUID, increasing sequence and a timezone-aware observation time. A registered node's bearer token must match its node ID. Tokens are compared in constant time and never echoed in payload errors. This is a private-network lab transport, using HTTP within a restricted VPC; tokens are not protection against an attacker with access to that network or a host's credential. Interface access uses SSH tunnels, and Uvicorn ignores proxy headers.
 
+## Inode diagnosis semantics
+
+Inode diagnosis coverage requires fresh inode totals/free counts, inode use, block use, and a present available-bytes counter for the configured filesystem; zero available bytes is measured data, not missing coverage. Three eligible observations at or above 95% inode use open `inode_exhaustion` only while available bytes are positive and block use remains below the effective block guard. The effective guard is `min(inode block guard, disk trigger)`, so lowering the disk trigger cannot make disk and inode rules open from the same sample; a separately configured inode guard is retained only when stricter. The effective configuration is frozen in the incident.
+
+Recovery is inode-specific: three fresh observations below 90% inode use resolve an active inode incident even when block counters are unavailable. `inode_available` and `block_available` remain separate evidence flags, and the Grafana incident lifecycle selects the former for inode incidents. Missing inode evidence never becomes healthy zero data.
+
 ## Memory and OOM semantics
 
 `/proc/meminfo` supplies `MemTotal`, `MemAvailable`, `SwapTotal`, and `SwapFree` in KiB, converted to bytes. Zero swap capacity is valid. `/proc/vmstat` supplies raw `pgfault`, `pgmajfault`, `pswpin`, and `pswpout` counters. Rates require a positive monotonic interval no longer than ten seconds and nondecreasing counters; swap pages are multiplied by the runtime page size before division. A first observation, worker restart, counter decrease, or long gap leaves rates unavailable.

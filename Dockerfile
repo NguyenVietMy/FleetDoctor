@@ -15,6 +15,8 @@ USER root
 COPY tests ./tests
 COPY scripts ./scripts
 COPY deploy ./deploy
+COPY monitoring ./monitoring
+COPY compose.yaml Dockerfile ./
 RUN uv sync --locked --all-extras
 CMD ["/app/.venv/bin/python", "-m", "pytest", "-q"]
 

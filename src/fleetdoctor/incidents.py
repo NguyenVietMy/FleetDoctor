@@ -22,6 +22,22 @@ class DiskConfig(BaseModel):
         return self
 
 
+class InodeConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+    trigger_percent: float = Field(default=95, gt=0, le=100)
+    recovery_percent: float = Field(default=90, ge=0, lt=100)
+    block_guard_percent: float = Field(default=95, gt=0, le=100)
+    consecutive_samples: int = Field(default=3, ge=1, le=120, strict=True)
+    max_gap_seconds: float = Field(default=10, gt=0, le=10)
+    severity: Literal["info", "warning", "critical"] = "critical"
+
+    @model_validator(mode="after")
+    def hysteresis(self) -> Self:
+        if self.recovery_percent >= self.trigger_percent:
+            raise ValueError("inode recovery must be below trigger")
+        return self
+
+
 class CpuConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
     trigger_busy_percent: float = Field(default=90, gt=0, le=100)
@@ -50,13 +66,13 @@ class Incident(BaseModel):
     id: UUID
     node_id: str
     resource: str
-    rule: Literal["disk_block_exhaustion", "cpu_saturation", "workload_oom"] = (
+    rule: Literal["disk_block_exhaustion", "inode_exhaustion", "cpu_saturation", "workload_oom"] = (
         "disk_block_exhaustion"
     )
     status: Literal["active", "resolved"] = "active"
     severity: Literal["info", "warning", "critical"] = "critical"
     diagnosis: str
-    configuration: DiskConfig | CpuConfig | OomConfig
+    configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig
     opening_evidence: dict[str, JsonValue]
     latest_evidence: dict[str, JsonValue]
     opened_at: datetime
@@ -73,9 +89,11 @@ class Incident(BaseModel):
         if not isinstance(value, dict) or not isinstance(value.get("configuration"), dict):
             return value
         rule = value.get("rule", "disk_block_exhaustion")
-        configuration: DiskConfig | CpuConfig | OomConfig
+        configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig
         if rule == "disk_block_exhaustion":
             configuration = DiskConfig.model_validate(value["configuration"])
+        elif rule == "inode_exhaustion":
+            configuration = InodeConfig.model_validate(value["configuration"])
         elif rule == "cpu_saturation":
             configuration = CpuConfig.model_validate(value["configuration"])
         elif rule == "workload_oom":
@@ -90,6 +108,7 @@ class Incident(BaseModel):
     def rule_contract(self) -> Self:
         expected = {
             "disk_block_exhaustion": DiskConfig,
+            "inode_exhaustion": InodeConfig,
             "cpu_saturation": CpuConfig,
             "workload_oom": OomConfig,
         }[self.rule]
@@ -97,6 +116,7 @@ class Incident(BaseModel):
             raise ValueError("incident rule and configuration disagree")
         availability = {
             "disk_block_exhaustion": "block_available",
+            "inode_exhaustion": "inode_available",
             "cpu_saturation": "cpu_available",
             "workload_oom": "memory_available",
         }[self.rule]
@@ -117,6 +137,7 @@ class Incident(BaseModel):
         age = (now - self.observed_at).total_seconds()
         availability = {
             "disk_block_exhaustion": "block_available",
+            "inode_exhaustion": "inode_available",
             "cpu_saturation": "cpu_available",
             "workload_oom": "memory_available",
         }[self.rule]

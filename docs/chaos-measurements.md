@@ -1,6 +1,6 @@
 # Chaos measurement record v 1
 
-`scripts/chaos_harness.py` owns reusable report/events/leases. `scripts/chaos_disk.py` supplies the API and owned remote injector. Reports are written atomically outside the checkout after each milestone/poll. Failed runs and original outcomes remain available for explicit recovery.
+`scripts/chaos_harness.py` owns reusable report/events/leases. `scripts/chaos_disk.py` and `scripts/chaos_inode.py` supply the API and owned remote injectors. Reports are written atomically outside the checkout after each milestone/poll. Failed runs and original outcomes remain available for explicit recovery.
 
 | Field | Meaning |
 | --- | --- |
@@ -22,4 +22,6 @@ The first trigger requires a new fresh observation of the exact prepared mount a
 
 Resource receipt and incident receipt each have their own monotonic timestamp. A 2.5s diagnosis query within the same poll produces 2.5s latency. A matching response arriving after 60s is a timeout. Recovery is accepted only within 60s after owned cleanup, with fresh healthy mount evidence and a resolved matching incident. Absent incidents during a failed injection still require verified cleanup/healthy resource evidence; the run remains failed.
 
-This schema supports a single disk demonstration. It does not establish a median or five-run calibrated acceptance. Reports must state synthetic Docker versus actual AWS environments, the inspected source snapshot, and unrun visual/live gates explicitly.
+Disk and inode controllers share one filesystem lease per target, so their helpers cannot run simultaneously. Inode threshold timing records resource observation before the diagnosis query and response completion after it; trigger-to-diagnosis latency therefore includes the query delay. Its helper evidence also binds the exact owned directory, write-ahead file ledger, worker/watchdog process identity, and fixed mount mapping.
+
+This schema supports a single disk or inode demonstration. It does not establish a median or five-run calibrated acceptance. Reports must state synthetic Docker versus actual AWS environments, the inspected source snapshot, and unrun visual/live gates explicitly.

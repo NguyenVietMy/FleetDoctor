@@ -26,6 +26,7 @@ MOUNT = BASE / "disk"
 RESOURCE = BASE / "resource.json"
 IDENTITY = BASE / "identity.json"
 LEASE = BASE / "disk-lease.json"
+INODE_LEASE = BASE / "inode-lease.json"
 CAPACITY = 384 * 1024 * 1024
 
 
@@ -50,7 +51,12 @@ def safe_directory() -> None:
         path.mkdir(exist_ok=True)
     if BASE.stat().st_uid != 0 or BASE.stat().st_mode & 0o022:
         raise ValueError("lab directory must be root-owned and not writable by others")
-    if MOUNT.is_symlink() or RESOURCE.is_symlink() or LEASE.is_symlink():
+    if (
+        MOUNT.is_symlink()
+        or RESOURCE.is_symlink()
+        or LEASE.is_symlink()
+        or INODE_LEASE.is_symlink()
+    ):
         raise ValueError("symlink resource refused")
 
 
@@ -101,7 +107,8 @@ def verify() -> dict[str, Any]:
     if not 256 * 1024 * 1024 <= total <= 512 * 1024 * 1024:
         raise ValueError("test filesystem capacity outside bounded range")
     resource["statvfs"] = {
-        key: getattr(blocks, key) for key in ("f_blocks", "f_bfree", "f_bavail", "f_frsize")
+        key: getattr(blocks, key)
+        for key in ("f_blocks", "f_bfree", "f_bavail", "f_frsize", "f_files", "f_ffree")
     }
     resource["kernel"] = platform.release()
     resource["os"] = platform.platform()
@@ -214,7 +221,9 @@ def prepare() -> dict[str, Any]:
         devices.append(device)
         if image_devices(image) != devices:
             raise ValueError("allocated loop identity mismatch")
-        command("mkfs.ext4", "-F", "-m", "0", device)
+        # The explicit small inode table applies only to newly created lab images.
+        # Retained resources above never pass through mkfs again.
+        command("mkfs.ext4", "-F", "-m", "0", "-N", "256", device)
         command("mount", "-t", "ext4", device, str(MOUNT))
         os.chmod(MOUNT, 0o755)
         resource = {
@@ -382,6 +391,8 @@ def start(token: str, duration: int) -> dict[str, Any]:
     path = run_path(token)
     if path.exists():
         raise ValueError("run token already exists; use explicit cleanup")
+    if INODE_LEASE.exists():
+        raise ValueError("inode injection lease is active")
     filler = MOUNT / ("filler-" + token)
     lease_inode = filler_inode = None
     launched: list[subprocess.Popen[bytes]] = []

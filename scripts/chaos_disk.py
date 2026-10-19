@@ -176,7 +176,7 @@ def execute(args: argparse.Namespace) -> None:
             if healthy and not any(i["resource"] == retained["resource"] for i in records):
                 retained["explicit_recovery"] = nodes
                 write_report(args.output, retained)
-                lease = LEASE_DIRECTORY / ("disk-" + args.target + ".lease")
+                lease = LEASE_DIRECTORY / ("filesystem-" + args.target + ".lease")
                 if lease.exists() and lease.read_text() == retained["token"]:
                     lease.unlink()
                 return

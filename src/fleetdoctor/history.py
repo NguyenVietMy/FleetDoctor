@@ -32,6 +32,11 @@ HISTORY_METRICS = {
     "workload_memory_usage_ratio": "fleetdoctor_workload_memory_usage_ratio",
     "workload_oom_kill_total": "fleetdoctor_workload_memory_oom_kill_total",
     "memory_coverage_ratio": "fleetdoctor_memory_coverage_ratio",
+    "fd_pressure_ratio": "fleetdoctor_fd_pressure_ratio",
+    "fd_count": "fleetdoctor_fd_count",
+    "fd_soft_limit": "fleetdoctor_fd_soft_limit",
+    "fd_growth_per_second": "fleetdoctor_fd_growth_per_second",
+    "fd_coverage_ratio": "fleetdoctor_fd_coverage_ratio",
 }
 
 

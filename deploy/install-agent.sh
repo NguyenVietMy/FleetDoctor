@@ -14,6 +14,7 @@ rm "$agent_env" "$ingest_token"
 install -m 0644 deploy/fleetdoctor-agent.service /etc/systemd/system/fleetdoctor-agent.service
 install -m 0644 deploy/fleetdoctor-disk-prepare.service /etc/systemd/system/fleetdoctor-disk-prepare.service
 install -m 0755 deploy/memory_resource.py /usr/local/sbin/fleetdoctor-memory-resource
+install -m 0755 deploy/fd_resource.py /usr/local/sbin/fleetdoctor-fd-resource
 systemctl daemon-reload
 systemctl enable --now fleetdoctor-agent
 systemctl restart fleetdoctor-agent

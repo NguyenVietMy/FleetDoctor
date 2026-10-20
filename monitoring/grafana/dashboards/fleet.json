@@ -160,7 +160,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT id::text, node_id, resource, rule, severity, status, opened_at, observed_at, updated_at, resolved_at, (evidence_reloaded OR now()-observed_at > interval '15 seconds' OR observed_at-now() > interval '2 seconds') AS evidence_stale, CASE rule WHEN 'cpu_saturation' THEN (record->'latest_evidence'->>'cpu_available')::boolean WHEN 'workload_oom' THEN (record->'latest_evidence'->>'memory_available')::boolean WHEN 'inode_exhaustion' THEN (record->'latest_evidence'->>'inode_available')::boolean ELSE (record->'latest_evidence'->>'block_available')::boolean END AS evidence_available FROM incidents WHERE status ~ '${status:raw}' ORDER BY opened_at DESC,id DESC LIMIT 100",
+          "rawSql": "SELECT id::text, node_id, resource, rule, severity, status, opened_at, observed_at, updated_at, resolved_at, (evidence_reloaded OR now()-observed_at > interval '15 seconds' OR observed_at-now() > interval '2 seconds') AS evidence_stale, CASE rule WHEN 'cpu_saturation' THEN (record->'latest_evidence'->>'cpu_available')::boolean WHEN 'workload_oom' THEN (record->'latest_evidence'->>'memory_available')::boolean WHEN 'inode_exhaustion' THEN (record->'latest_evidence'->>'inode_available')::boolean WHEN 'fd_pressure' THEN (record->'latest_evidence'->>'fd_available')::boolean ELSE (record->'latest_evidence'->>'block_available')::boolean END AS evidence_available FROM incidents WHERE status ~ '${status:raw}' ORDER BY opened_at DESC,id DESC LIMIT 100",
           "editorMode": "code"
         }
       ],
@@ -458,6 +458,26 @@
       "gridPos": {"x": 12, "y": 96, "w": 12, "h": 8},
       "targets": [{"expr": "fleetdoctor_active_incidents{rule=\"inode_exhaustion\"}", "refId": "A", "legendFormat": "{{node}}"}],
       "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 60,
+      "title": "Fleet FD pressure",
+      "description": "Highest fresh exact count/current finite soft-limit ratio per node; missing limits remain absent.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 104, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_fd_pressure_ratio", "refId": "A", "legendFormat": "{{node}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 61,
+      "title": "Fleet FD coverage",
+      "description": "Exact finite count/limit coverage by node. Prometheus history must be interpreted with observation freshness.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 104, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_fd_coverage_ratio", "refId": "A", "legendFormat": "{{node}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
     }
   ],
   "templating": {

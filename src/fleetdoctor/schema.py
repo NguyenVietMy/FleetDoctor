@@ -30,6 +30,14 @@ MEMORY_UNITS = {
     "page_activity": "bytes_per_second",
 }
 UNITS_V3 = {**UNITS_V2, **MEMORY_UNITS}
+FD_UNITS = {
+    "file_descriptors": "count",
+    "fd_limit": "count",
+    "fd_pressure": "ratio",
+    "fd_growth": "descriptors_per_second",
+    "fd_growth_interval": "seconds",
+}
+UNITS_V4 = {**UNITS_V3, **FD_UNITS}
 FIELDS = (
     "total_bytes",
     "free_bytes",
@@ -143,6 +151,111 @@ class ProcessObservation(WireModel):
     cpu_percent: Annotated[float, Field(ge=0, le=409600, allow_inf_nan=False)] | None = None
     rss_bytes: Count | None = None
     configured: bool = False
+
+
+class FdProcessIdentity(WireModel):
+    boot_id: UUID
+    pid: Annotated[StrictInt, Field(ge=1, le=2**31 - 1)]
+    starttime_ticks: Count
+
+    @property
+    def resource(self) -> str:
+        return f"boot:{self.boot_id}/pid:{self.pid}/start:{self.starttime_ticks}"
+
+
+class FdProcessObservation(WireModel):
+    identity: FdProcessIdentity
+    status: Literal["present", "exited", "replaced", "unknown"]
+    watched: bool = False
+    configured: bool = False
+    comm: str | None = Field(default=None, min_length=1, max_length=128)
+    descriptor_count: Count | None = None
+    soft_limit: Count | None = None
+    limit_unlimited: bool = False
+    pressure_ratio: Ratio | None = None
+    count_delta: Annotated[StrictInt, Field(ge=-4096, le=4096)] | None = None
+    growth_per_second: Annotated[float, Field(allow_inf_nan=False)] | None = None
+    growth_interval_seconds: Annotated[float, Field(gt=0, le=10, allow_inf_nan=False)] | None = None
+    cpu_percent: Annotated[float, Field(ge=0, le=409600, allow_inf_nan=False)] | None = None
+    rss_bytes: Count | None = None
+    errors: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("errors")
+    @classmethod
+    def bounded_fd_errors(cls, errors: list[str]) -> list[str]:
+        if any(not error or len(error) > 128 for error in errors):
+            raise ValueError("FD collection error must contain 1..128 characters")
+        return errors
+
+    @model_validator(mode="after")
+    def consistent_fd_process(self) -> Self:
+        if self.limit_unlimited and self.soft_limit is not None:
+            raise ValueError("unlimited FD limit cannot also be finite")
+        if self.pressure_ratio is not None:
+            if self.descriptor_count is None or self.soft_limit is None or self.soft_limit <= 0:
+                raise ValueError("FD pressure requires count and a positive finite limit")
+            if abs(self.pressure_ratio - self.descriptor_count / self.soft_limit) > 0.000001:
+                raise ValueError("incorrect FD pressure ratio")
+        growth = (self.count_delta, self.growth_per_second, self.growth_interval_seconds)
+        if any(value is None for value in growth) and any(value is not None for value in growth):
+            raise ValueError("FD count delta, growth, and interval must be present together")
+        if (
+            self.count_delta is not None
+            and self.growth_per_second is not None
+            and self.growth_interval_seconds is not None
+            and abs(self.growth_per_second - self.count_delta / self.growth_interval_seconds)
+            > 0.000001
+        ):
+            raise ValueError("incorrect FD growth rate")
+        if self.status != "present" and any(
+            value is not None
+            for value in (
+                self.comm,
+                self.descriptor_count,
+                self.soft_limit,
+                self.pressure_ratio,
+                self.count_delta,
+                self.growth_per_second,
+                self.growth_interval_seconds,
+                self.cpu_percent,
+                self.rss_bytes,
+            )
+        ):
+            raise ValueError("non-present FD identity cannot carry process measurements")
+        if self.status == "present":
+            exact = self.descriptor_count is not None and (
+                self.soft_limit is not None or self.limit_unlimited
+            )
+            if not exact and not self.errors:
+                raise ValueError("unavailable present FD measurements require errors")
+        elif not self.watched:
+            raise ValueError("exit/replacement/unknown status is only valid for a watched identity")
+        return self
+
+
+class FdObservation(WireModel):
+    observations: list[FdProcessObservation] = Field(default_factory=list, max_length=68)
+    watch_coverage: Literal["available", "degraded", "unavailable"] = "unavailable"
+    watch_revision: Count | None = None
+    selected_identities: Annotated[StrictInt, Field(ge=0, le=36)] = 0
+    configured_pids: Annotated[StrictInt, Field(ge=0, le=16)] = 0
+    context_trimmed: bool = False
+    errors: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def consistent_fd(self) -> Self:
+        resources = [item.identity.resource for item in self.observations]
+        if len(resources) != len(set(resources)):
+            raise ValueError("duplicate FD process identity")
+        if self.watch_coverage == "available" and self.watch_revision is None:
+            raise ValueError("available FD watch coverage requires a revision")
+        if self.watch_coverage != "available" and not self.errors:
+            raise ValueError("degraded FD watch coverage requires an error")
+        if any(not error or len(error) > 128 for error in self.errors):
+            raise ValueError("FD block error must contain 1..128 characters")
+        if len(self.model_dump_json().encode("utf-8")) > 24 * 1024:
+            raise ValueError("FD observation exceeds 24KiB")
+        return self
 
 
 class CpuObservation(WireModel):
@@ -369,7 +482,7 @@ class MemoryObservation(WireModel):
 
 
 class Sample(WireModel):
-    schema_version: Literal[1, 2, 3]
+    schema_version: Literal[1, 2, 3, 4]
     node_id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
     boot_id: UUID
     agent_session_id: UUID
@@ -379,6 +492,7 @@ class Sample(WireModel):
     filesystems: list[Filesystem] = Field(min_length=1, max_length=8)
     cpu: CpuObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     memory: MemoryObservation | None = Field(default=None, exclude_if=lambda value: value is None)
+    fd: FdObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     delivery: Delivery | None = None
 
     @field_validator("observed_at")
@@ -391,24 +505,40 @@ class Sample(WireModel):
     @field_validator("units")
     @classmethod
     def exact_units(cls, value: dict[str, str]) -> dict[str, str]:
-        if value not in (UNITS, UNITS_V2, UNITS_V3):
+        if value not in (UNITS, UNITS_V2, UNITS_V3, UNITS_V4):
             raise ValueError("unsupported metric units")
         return value
 
     @model_validator(mode="after")
     def unique_paths(self) -> Self:
         if self.schema_version == 1 and (
-            self.units != UNITS or self.cpu is not None or self.memory is not None
+            self.units != UNITS
+            or self.cpu is not None
+            or self.memory is not None
+            or self.fd is not None
         ):
             raise ValueError("schema v1 cannot contain CPU telemetry")
         if self.schema_version == 2 and (
-            self.units != UNITS_V2 or self.cpu is None or self.memory is not None
+            self.units != UNITS_V2
+            or self.cpu is None
+            or self.memory is not None
+            or self.fd is not None
         ):
             raise ValueError("schema v2 requires CPU telemetry and v2 units")
         if self.schema_version == 3 and (
-            self.units != UNITS_V3 or self.cpu is None or self.memory is None
+            self.units != UNITS_V3 or self.cpu is None or self.memory is None or self.fd is not None
         ):
             raise ValueError("schema v3 requires CPU and memory telemetry and v3 units")
+        if self.schema_version == 4 and (
+            self.units != UNITS_V4 or self.cpu is None or self.memory is None or self.fd is None
+        ):
+            raise ValueError("schema v4 requires CPU, memory, FD telemetry and v4 units")
+        if self.fd is not None and any(
+            item.identity.boot_id != self.boot_id
+            for item in self.fd.observations
+            if item.status == "present"
+        ):
+            raise ValueError("present FD identity must match its sample boot")
         if self.memory is not None:
             if any(item.boot_id != self.boot_id for item in self.memory.workloads):
                 raise ValueError("workload boot identity must match its sample")

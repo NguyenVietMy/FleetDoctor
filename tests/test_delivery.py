@@ -13,7 +13,16 @@ from pydantic import SecretStr, ValidationError
 from fleetdoctor import agent, delivery
 from fleetdoctor.agent import make_sample
 from fleetdoctor.delivery import DeliveryQueue, acknowledgement, send, uploader
-from fleetdoctor.schema import Delivery, Filesystem, Sample
+from fleetdoctor.fd import WatchResponse
+from fleetdoctor.schema import (
+    CpuObservation,
+    Delivery,
+    FdObservation,
+    Filesystem,
+    HostMemoryObservation,
+    MemoryObservation,
+    Sample,
+)
 
 NOW = datetime.now(UTC)
 TOKEN = SecretStr("a" * 40)
@@ -489,6 +498,85 @@ def test_once_is_one_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
     assert calls == 1 and worker.collect.call_count == 1
+
+
+@pytest.mark.parametrize("with_fd", [False, True], ids=["fd-disabled", "fd-v4"])
+def test_collect_loop_recovers_after_unavoidable_oversize_payload(
+    monkeypatch: pytest.MonkeyPatch, with_fd: bool
+) -> None:
+    normal = sample(1, datetime.now(UTC))
+    cpu = CpuObservation(errors=["fixture"])
+    memory = MemoryObservation(
+        host=HostMemoryObservation(errors=["m" * 66_000]),
+        kernel_log_errors=["fixture"],
+    )
+    oversized = make_sample(
+        "node-a",
+        normal.boot_id,
+        normal.agent_session_id,
+        0,
+        [Filesystem(mountpoint="/", errors=["fixture"])],
+        datetime.now(UTC),
+        cpu=cpu,
+        memory=memory,
+        fd=FdObservation(watch_coverage="unavailable", errors=["fixture"]) if with_fd else None,
+    )
+    assert len(oversized.model_dump_json().encode("utf-8")) > delivery.MAX_BODY
+    values = iter((oversized, normal))
+    monkeypatch.setattr(agent, "make_sample", lambda *args, **kwargs: next(values))
+    monkeypatch.setattr(agent, "next_tick", lambda scheduled, now: now + 0.01)
+    monkeypatch.setattr(
+        agent,
+        "refresh_fd_watch",
+        lambda *args, **kwargs: asyncio.sleep(
+            0,
+            result=(
+                WatchResponse(node_id="node-a", revision=0, complete=True, watches=[]),
+                "available",
+                None,
+            ),
+        ),
+    )
+    original_client = httpx.AsyncClient
+    requests: list[Sample] = []
+    stopped = asyncio.Event()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(Sample.model_validate_json(request.content))
+        stopped.set()
+        return httpx.Response(200, content=ack())
+
+    def client_factory(**kwargs: object) -> httpx.AsyncClient:
+        return original_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+    worker = Mock(collect=Mock(return_value=[Filesystem(mountpoint="/", errors=["fixture"])]))
+    optional = Mock(collect=Mock(return_value=None))
+
+    async def scenario() -> None:
+        await asyncio.wait_for(
+            agent.collect_loop(
+                "node-a",
+                normal.boot_id,
+                normal.agent_session_id,
+                worker,
+                "http://fixture",
+                TOKEN,
+                ("/",),
+                False,
+                stopped,
+                cpu_worker=optional if with_fd else None,
+                memory_worker=optional if with_fd else None,
+                fd_worker=optional if with_fd else None,
+            ),
+            timeout=3,
+        )
+
+    asyncio.run(scenario())
+    assert len(requests) == 1
+    assert requests[0].sequence == 1
+    assert requests[0].delivery == Delivery(discard_total=1)
+    assert worker.collect.call_count == 2
 
 
 @pytest.mark.parametrize("bad", [-1, True, "1", 2**64])

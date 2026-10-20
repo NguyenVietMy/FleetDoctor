@@ -5,8 +5,9 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from fleetdoctor.incidents import CpuConfig, DiskConfig, Incident, InodeConfig, OomConfig
-from fleetdoctor.schema import Filesystem, Sample, WorkloadMemoryObservation
+from fleetdoctor.fd import MAX_ACTIVE_WATCHES, parse_resource
+from fleetdoctor.incidents import CpuConfig, DiskConfig, FdConfig, Incident, InodeConfig, OomConfig
+from fleetdoctor.schema import FdProcessObservation, Filesystem, Sample, WorkloadMemoryObservation
 
 
 def evidence(sample: Sample, fs: Filesystem) -> dict[str, Any]:
@@ -29,8 +30,11 @@ def evidence(sample: Sample, fs: Filesystem) -> dict[str, Any]:
 class Window:
     opening: int = 0
     recovery: int = 0
-    configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | None = None
+    configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | None = None
     guard_percent: float | None = None
+    exit_confirmations: int = 0
+    replacement_boot: str | None = None
+    replacement_confirmations: int = 0
 
 
 class DiskEvaluator:
@@ -537,12 +541,220 @@ class OomEvaluator:
         return changes
 
 
+def fd_evidence(
+    sample: Sample,
+    observation: FdProcessObservation | None,
+    resource: str,
+    *,
+    admission_capacity: str = "available",
+) -> dict[str, Any]:
+    available = bool(
+        observation is not None
+        and observation.status == "present"
+        and observation.descriptor_count is not None
+        and observation.soft_limit is not None
+        and observation.soft_limit > 0
+    )
+    return {
+        "node_id": sample.node_id,
+        "boot_id": str(sample.boot_id),
+        "agent_session_id": str(sample.agent_session_id),
+        "sequence": sample.sequence,
+        "observed_at": sample.observed_at.isoformat(),
+        "resource": resource,
+        "identity": observation.identity.model_dump(mode="json")
+        if observation is not None
+        else parse_resource(resource).model_dump(mode="json"),
+        "fd_available": available,
+        "status": observation.status if observation is not None else "unknown",
+        "observation": observation.model_dump(mode="json") if observation is not None else None,
+        "suspected_leak": bool(
+            available
+            and observation is not None
+            and observation.growth_per_second is not None
+            and observation.growth_per_second > 0
+        ),
+        "coverage": {
+            "watch": sample.fd.watch_coverage if sample.fd is not None else "unavailable",
+            "watch_revision": sample.fd.watch_revision if sample.fd is not None else None,
+            "admission_capacity": admission_capacity,
+            "errors": (
+                observation.errors
+                if observation is not None
+                else ["watched_identity_missing_from_fd_block"]
+            ),
+        },
+    }
+
+
+class FdEvaluator:
+    def __init__(self, active: list[Incident]) -> None:
+        self.active = {(incident.node_id, incident.resource): incident for incident in active}
+        self.windows: dict[tuple[str, str], Window] = {}
+        self.reloaded = {incident.id for incident in active}
+        self.admission_overflow_nodes: set[str] = set()
+
+    @staticmethod
+    def _reset(window: Window, configuration: FdConfig) -> None:
+        window.opening = window.recovery = window.exit_confirmations = 0
+        window.replacement_boot = None
+        window.replacement_confirmations = 0
+        window.configuration = configuration
+
+    def evaluate(
+        self, sample: Sample, previous: Sample | None, now: datetime, config: FdConfig
+    ) -> list[Incident]:
+        changes: list[Incident] = []
+        observations = {
+            item.identity.resource: item
+            for item in (sample.fd.observations if sample.fd is not None else [])
+        }
+        active_for_node = {
+            resource: incident
+            for (node, resource), incident in self.active.items()
+            if node == sample.node_id
+        }
+        candidate_continuity = bool(
+            previous is not None
+            and previous.agent_session_id == sample.agent_session_id
+            and 0
+            < (sample.observed_at - previous.observed_at).total_seconds()
+            <= config.max_gap_seconds
+        )
+        for resource, incident in sorted(active_for_node.items()):
+            measured = incident.configuration
+            assert isinstance(measured, FdConfig)
+            observation = observations.get(resource)
+            window = self.windows.setdefault((sample.node_id, resource), Window())
+            active_continuity = bool(
+                previous is not None
+                and previous.agent_session_id == sample.agent_session_id
+                and 0
+                < (sample.observed_at - previous.observed_at).total_seconds()
+                <= measured.max_gap_seconds
+            )
+            if not active_continuity or window.configuration != measured:
+                self._reset(window, measured)
+            old_identity = parse_resource(resource)
+            updated = incident.model_copy(deep=True)
+            reason = None
+            if sample.boot_id != old_identity.boot_id:
+                current_boot = str(sample.boot_id)
+                if window.replacement_boot != current_boot:
+                    window.replacement_boot = current_boot
+                    window.replacement_confirmations = 0
+                window.replacement_confirmations += 1
+                window.recovery = window.exit_confirmations = 0
+                if window.replacement_confirmations >= measured.consecutive_samples:
+                    reason = "boot_replaced"
+            else:
+                window.replacement_boot = None
+                window.replacement_confirmations = 0
+                status = observation.status if observation is not None else "unknown"
+                if status in ("exited", "replaced"):
+                    window.exit_confirmations += 1
+                    window.recovery = 0
+                    if window.exit_confirmations >= measured.consecutive_samples:
+                        reason = "confirmed_exit"
+                else:
+                    window.exit_confirmations = 0
+                    ratio = observation.pressure_ratio if observation is not None else None
+                    window.recovery = (
+                        window.recovery + 1
+                        if ratio is not None and ratio * 100 < measured.recovery_percent
+                        else 0
+                    )
+                    if window.recovery >= measured.consecutive_samples:
+                        reason = "descriptor_release"
+            facts = fd_evidence(sample, observation, resource)
+            if reason is not None:
+                facts["resolution_reason"] = reason
+                if reason == "boot_replaced":
+                    facts["prior_boot_id"] = str(old_identity.boot_id)
+                    facts["current_boot_id"] = str(sample.boot_id)
+                updated.status = "resolved"
+                updated.resolved_at = now
+                updated.resolution_reason = reason  # type: ignore[assignment]
+                self.active.pop((sample.node_id, resource))
+                self._reset(window, measured)
+            else:
+                self.active[(sample.node_id, resource)] = updated
+            updated.latest_evidence = facts
+            updated.observed_at = sample.observed_at
+            updated.evaluated_at = updated.updated_at = now
+            self.reloaded.discard(updated.id)
+            changes.append(updated)
+
+        self.admission_overflow_nodes.discard(sample.node_id)
+        for key in list(self.windows):
+            if (
+                key[0] == sample.node_id
+                and key[1] not in observations
+                and key[1] not in active_for_node
+            ):
+                self.windows.pop(key)
+        candidates: list[tuple[bool, str, FdProcessObservation, Window]] = []
+        for resource, observation in observations.items():
+            if (sample.node_id, resource) in self.active or resource in active_for_node:
+                continue
+            window = self.windows.setdefault((sample.node_id, resource), Window())
+            if not candidate_continuity or window.configuration != config:
+                self._reset(window, config)
+            eligible = bool(
+                observation.status == "present"
+                and observation.descriptor_count is not None
+                and observation.soft_limit is not None
+                and observation.soft_limit > 0
+                and observation.pressure_ratio is not None
+                and observation.pressure_ratio * 100 >= config.trigger_percent
+            )
+            window.opening = window.opening + 1 if eligible else 0
+            window.recovery = window.exit_confirmations = 0
+            if window.opening >= config.consecutive_samples:
+                candidates.append((not observation.configured, resource, observation, window))
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        slots = MAX_ACTIVE_WATCHES - len(active_for_node)
+        if len(candidates) > max(0, slots):
+            self.admission_overflow_nodes.add(sample.node_id)
+        for _, resource, observation, window in candidates[: max(0, slots)]:
+            facts = fd_evidence(sample, observation, resource)
+            opened = Incident(
+                id=uuid4(),
+                node_id=sample.node_id,
+                resource=resource,
+                rule="fd_pressure",
+                severity=config.severity,
+                diagnosis=(
+                    f"Process {observation.identity.pid} has sustained file-descriptor pressure; "
+                    "positive measured growth supports suspected leakage but does not prove a cause"
+                ),
+                configuration=config,
+                opening_evidence=facts,
+                latest_evidence=facts,
+                opened_at=now,
+                observed_at=sample.observed_at,
+                evaluated_at=now,
+                updated_at=now,
+                investigation_steps=[
+                    "Confirm the recorded boot ID, PID, and /proc start time before inspecting the process",
+                    "Compare /proc/PID/fd count with the process Max open files soft limit without reading descriptor targets",
+                    "Use lsof or application diagnostics only after identity confirmation; observed growth is not causal proof",
+                    "Release only owned descriptors or stop only the owned process, then require three fresh confirmations",
+                ],
+            )
+            self.active[(sample.node_id, resource)] = opened
+            window.opening = 0
+            changes.append(opened)
+        return changes
+
+
 class CompositeEvaluator:
     def __init__(self, active: list[Incident]) -> None:
         self.disk = DiskEvaluator([i for i in active if i.rule == "disk_block_exhaustion"])
         self.inode = InodeEvaluator([i for i in active if i.rule == "inode_exhaustion"])
         self.cpu = CpuEvaluator([i for i in active if i.rule == "cpu_saturation"])
         self.oom = OomEvaluator([i for i in active if i.rule == "workload_oom"])
+        self.fd = FdEvaluator([i for i in active if i.rule == "fd_pressure"])
 
     @property
     def active(self) -> dict[tuple[str, str, str], Incident]:
@@ -553,6 +765,7 @@ class CompositeEvaluator:
                 *self.inode.active.values(),
                 *self.cpu.active.values(),
                 *self.oom.active.values(),
+                *self.fd.active.values(),
             ]
         }
 
@@ -563,10 +776,11 @@ class CompositeEvaluator:
             | set(self.inode.reloaded)
             | set(self.cpu.reloaded)
             | set(self.oom.reloaded)
+            | set(self.fd.reloaded)
         )
 
     def reset_node(self, node: str) -> None:
-        for evaluator in (self.disk, self.inode, self.cpu, self.oom):
+        for evaluator in (self.disk, self.inode, self.cpu, self.oom, self.fd):
             for key in list(evaluator.windows):
                 if key[0] == node:
                     evaluator.windows.pop(key)
@@ -582,6 +796,7 @@ class CompositeEvaluator:
             (i.node_id, i.resource): i for i in records if i.rule == "cpu_saturation"
         }
         self.oom.active = {(i.node_id, i.resource): i for i in records if i.rule == "workload_oom"}
+        self.fd.active = {(i.node_id, i.resource): i for i in records if i.rule == "fd_pressure"}
         for node in affected:
             self.reset_node(node)
         self.disk.reloaded.update(
@@ -596,6 +811,9 @@ class CompositeEvaluator:
         self.oom.reloaded.update(
             i.id for i in records if i.rule == "workload_oom" and i.node_id in affected
         )
+        self.fd.reloaded.update(
+            i.id for i in records if i.rule == "fd_pressure" and i.node_id in affected
+        )
 
     def evaluate(
         self,
@@ -606,10 +824,12 @@ class CompositeEvaluator:
         inode_config: InodeConfig,
         cpu_config: CpuConfig,
         oom_config: OomConfig,
+        fd_config: FdConfig,
     ) -> list[Incident]:
         return [
             *self.disk.evaluate(sample, previous, now, disk_config),
             *self.inode.evaluate(sample, previous, now, inode_config, disk_config),
             *self.cpu.evaluate(sample, previous, now, cpu_config),
             *self.oom.evaluate(sample, previous, now, oom_config),
+            *self.fd.evaluate(sample, previous, now, fd_config),
         ]

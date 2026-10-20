@@ -1,4 +1,4 @@
-name: Task 01 through 07 checks
+name: Task 01 through 08 checks
 on: [push, pull_request]
 jobs:
   filesystem-and-services:
@@ -16,7 +16,7 @@ jobs:
       - run: uv run pytest
       - name: Run Linux root fixture suite
         run: |
-          tag="fleetdoctor-task07-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
+          tag="fleetdoctor-task08-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
           trap 'docker image rm --force "$tag" >/dev/null 2>&1 || true' EXIT
           docker build --target test --tag "$tag" .
           docker run --rm "$tag"
@@ -27,9 +27,10 @@ jobs:
       - run: terraform -chdir=infra/aws fmt -check
       - run: terraform -chdir=infra/aws init -backend=false -lockfile=readonly
       - run: terraform -chdir=infra/aws validate
-      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task07-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task08-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/disk_helper_integration.py --output $RUNNER_TEMP/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/inode_helper_integration.py --output $RUNNER_TEMP/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - run: uv run python scripts/fd_helper_integration.py --output $RUNNER_TEMP/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/cpu_smoke.py --workers 2 --seconds 2 --output $RUNNER_TEMP/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
       - name: Prepare accessible native OOM runtime
         run: |
@@ -63,11 +64,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: task07-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: task08-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/task07-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task08-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task06-oom-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task06-oom-helper-${{ github.run_id }}-${{ github.run_attempt }}.json

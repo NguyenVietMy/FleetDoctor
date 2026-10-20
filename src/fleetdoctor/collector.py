@@ -25,8 +25,15 @@ from fleetdoctor.checkpoint import (
     RetiredSession,
     sample_fingerprint,
 )
+from fleetdoctor.fd import (
+    MAX_ACTIVE_WATCHES,
+    MAX_WATCH_RESPONSE,
+    WatchIdentity,
+    WatchResponse,
+    parse_resource,
+)
 from fleetdoctor.history import HISTORY_METRICS, HistoryClient, validate_range
-from fleetdoctor.incidents import CpuConfig, DiskConfig, InodeConfig, OomConfig
+from fleetdoctor.incidents import CpuConfig, DiskConfig, FdConfig, InodeConfig, OomConfig
 from fleetdoctor.memory import validate_cgroup_paths
 from fleetdoctor.rules import CompositeEvaluator
 from fleetdoctor.schema import FIELDS, Sample, WorkloadMemoryObservation
@@ -68,6 +75,7 @@ class State:
         inode_config: InodeConfig | None = None,
         cpu_config: CpuConfig | None = None,
         oom_config: OomConfig | None = None,
+        fd_config: FdConfig | None = None,
         cgroup_paths: tuple[str, ...] = (),
     ) -> None:
         self.nodes, self.paths, self.clock = nodes, paths, clock
@@ -85,7 +93,8 @@ class State:
             inode_config or InodeConfig(),
             cpu_config or CpuConfig(),
         )
-        self.oom_config, self.cgroup_paths = oom_config or OomConfig(), cgroup_paths
+        self.oom_config, self.fd_config = oom_config or OomConfig(), fd_config or FdConfig()
+        self.cgroup_paths = cgroup_paths
         snapshot = store.snapshot(set(nodes))
         self.evaluator = CompositeEvaluator(snapshot.active)
         for checkpoint in snapshot.checkpoints.values():
@@ -166,6 +175,7 @@ class State:
                 self.inode_config,
                 self.cpu_config,
                 self.oom_config,
+                self.fd_config,
             )
             retired = list(self.retired[sample.node_id])
             if previous and identity != prev_identity:
@@ -217,6 +227,7 @@ class State:
                         "inode_exhaustion",
                         "cpu_saturation",
                         "workload_oom",
+                        "fd_pressure",
                     )
                 }
                 if active is not None
@@ -224,6 +235,12 @@ class State:
             )
             cpu = sample.cpu if sample else None
             memory = sample.memory if sample else None
+            fd = sample.fd if sample else None
+            fd_active_count = (
+                sum(i.node_id == node and i.rule == "fd_pressure" for i in active)
+                if active is not None
+                else None
+            )
             cpu_coverage = {
                 "host_rates": "available"
                 if fresh and cpu is not None and cpu.busy_percent is not None
@@ -319,8 +336,34 @@ class State:
                         for path in self.cgroup_paths
                     },
                 },
+                "fd_coverage": {
+                    "watch": fd.watch_coverage if fresh and fd is not None else "unavailable",
+                    "watch_revision": fd.watch_revision if fresh and fd is not None else None,
+                    "admission_capacity": (
+                        "unavailable"
+                        if fd_active_count is None or fd_active_count >= MAX_ACTIVE_WATCHES
+                        else (
+                            "overflow"
+                            if node in self.evaluator.fd.admission_overflow_nodes
+                            else "available"
+                        )
+                    ),
+                    "candidate_overflow": node in self.evaluator.fd.admission_overflow_nodes,
+                    "observed": sum(
+                        item.status == "present"
+                        and item.descriptor_count is not None
+                        and item.soft_limit is not None
+                        for item in fd.observations
+                    )
+                    if fresh and fd is not None
+                    else 0,
+                    "total": len(fd.observations) if fresh and fd is not None else 0,
+                    "errors": fd.errors
+                    if fresh and fd is not None
+                    else ["observation_not_fresh" if sample else "observation_unavailable"],
+                },
                 "sample": sample.model_dump(
-                    mode="json", exclude=set() if fresh else {"filesystems", "cpu", "memory"}
+                    mode="json", exclude=set() if fresh else {"filesystems", "cpu", "memory", "fd"}
                 )
                 if sample
                 else None,
@@ -329,7 +372,42 @@ class State:
                 else None,
                 "cpu": cpu.model_dump(mode="json") if cpu is not None and fresh else None,
                 "memory": memory.model_dump(mode="json") if memory is not None and fresh else None,
+                "fd": fd.model_dump(mode="json") if fd is not None and fresh else None,
             }
+
+    def fd_watch(self, node: str) -> WatchResponse:
+        with self.lock:
+            snapshot = self.store.snapshot(set(self.nodes))
+            self._reconcile(snapshot)
+            checkpoint = snapshot.checkpoints.get(node)
+            records = sorted(
+                (
+                    incident
+                    for incident in snapshot.active
+                    if incident.node_id == node and incident.rule == "fd_pressure"
+                ),
+                key=lambda incident: incident.resource,
+            )
+            if len(records) > MAX_ACTIVE_WATCHES:
+                raise StoreError("durable FD watch capacity exceeded")
+            watches = []
+            for incident in records:
+                identity = parse_resource(incident.resource)
+                watches.append(
+                    WatchIdentity(
+                        **identity.model_dump(),
+                        resource=incident.resource,
+                    )
+                )
+            response = WatchResponse(
+                node_id=node,
+                revision=checkpoint.revision if checkpoint is not None else 0,
+                complete=True,
+                watches=watches,
+            )
+            if len(response.model_dump_json().encode("utf-8")) > MAX_WATCH_RESPONSE:
+                raise StoreError("durable FD watch response exceeds 16KiB")
+            return response
 
 
 def create_app(
@@ -342,6 +420,7 @@ def create_app(
     inode_config: InodeConfig | None = None,
     cpu_config: CpuConfig | None = None,
     oom_config: OomConfig | None = None,
+    fd_config: FdConfig | None = None,
     cgroup_paths: tuple[str, ...] = (),
 ) -> FastAPI:
     if not nodes or len(nodes) > 16 or any(len(v.get_secret_value()) < 32 for v in nodes.values()):
@@ -359,6 +438,7 @@ def create_app(
         inode_config or InodeConfig(),
         cpu_config or CpuConfig(),
         oom_config or OomConfig(),
+        fd_config or FdConfig(),
         cgroup_paths,
     )
     app = FastAPI(title="FleetDoctor", version="0.1.0")
@@ -391,6 +471,7 @@ def create_app(
             ),
             "cpu_rule": state.cpu_config.model_dump(),
             "oom_rule": state.oom_config.model_dump(),
+            "fd_rule": state.fd_config.model_dump(),
             "filesystems": list(paths),
             "cgroups": list(cgroup_paths),
             "cadence_seconds": 5,
@@ -409,8 +490,17 @@ def create_app(
             "status": "ok",
             "storage": "incidents_and_ingestion_checkpoints_durable",
             "sample_history": "not_persisted",
-            "slice": "07",
+            "slice": "08",
         }
+
+    @app.get("/nodes/{node}/fd-watch")
+    def fd_watch(node: str, request: Request) -> dict[str, Any]:
+        token = nodes.get(node)
+        auth = request.headers.get("authorization", "")
+        expected = "Bearer " + token.get_secret_value() if token else ""
+        if not token or not hmac.compare_digest(auth.encode(), expected.encode()):
+            raise HTTPException(403, "node identity not authorized")
+        return state.fd_watch(node).model_dump(mode="json")
 
     @app.post("/ingest")
     async def ingest(request: Request) -> dict[str, Any]:
@@ -745,6 +835,48 @@ def create_app(
             ["node", "scope"],
             registry=registry,
         )
+        fd_pressure_g = Gauge(
+            "fleetdoctor_fd_pressure_ratio",
+            "Highest observed finite process FD pressure on the node",
+            ["node"],
+            registry=registry,
+        )
+        fd_count_g = Gauge(
+            "fleetdoctor_fd_count",
+            "Descriptor count for the node's highest-pressure observed process",
+            ["node"],
+            registry=registry,
+        )
+        fd_limit_g = Gauge(
+            "fleetdoctor_fd_soft_limit",
+            "Actual finite soft limit for the node's highest-pressure observed process",
+            ["node"],
+            registry=registry,
+        )
+        fd_growth_g = Gauge(
+            "fleetdoctor_fd_growth_per_second",
+            "Measured descriptor growth for the node's highest-pressure observed process",
+            ["node"],
+            registry=registry,
+        )
+        fd_coverage_g = Gauge(
+            "fleetdoctor_fd_coverage_ratio",
+            "Fraction of bounded FD identities with exact count and finite limit",
+            ["node"],
+            registry=registry,
+        )
+        fd_admission_g = Gauge(
+            "fleetdoctor_fd_admission_capacity_available",
+            "FD incident admission capacity is available",
+            ["node"],
+            registry=registry,
+        )
+        fd_overflow_g = Gauge(
+            "fleetdoctor_fd_admission_candidate_overflow",
+            "A qualifying FD candidate was rejected by the active incident cap",
+            ["node"],
+            registry=registry,
+        )
         try:
             views = {node: state.view(node, include_counts=storage_ok) for node in nodes}
         except StoreError:
@@ -817,6 +949,29 @@ def create_app(
                         )
                         if value is not None:
                             gauge.labels(node, cgroup).set(value)
+            fd_coverage = view["fd_coverage"]
+            fd_coverage_g.labels(node).set(
+                fd_coverage["observed"] / fd_coverage["total"]
+                if view["fresh"] and fd_coverage["total"]
+                else 0
+            )
+            fd_admission_g.labels(node).set(int(fd_coverage["admission_capacity"] == "available"))
+            fd_overflow_g.labels(node).set(int(fd_coverage["candidate_overflow"]))
+            if view["fd"] is not None:
+                exact = [
+                    item
+                    for item in view["fd"]["observations"]
+                    if item["pressure_ratio"] is not None
+                    and item["descriptor_count"] is not None
+                    and item["soft_limit"] is not None
+                ]
+                if exact:
+                    highest = max(exact, key=lambda item: item["pressure_ratio"])
+                    fd_pressure_g.labels(node).set(highest["pressure_ratio"])
+                    fd_count_g.labels(node).set(highest["descriptor_count"])
+                    fd_limit_g.labels(node).set(highest["soft_limit"])
+                    if highest["growth_per_second"] is not None:
+                        fd_growth_g.labels(node).set(highest["growth_per_second"])
         return Response(
             generate_latest(registry), media_type="text/plain; version=0.0.4; charset=utf-8"
         )
@@ -833,5 +988,6 @@ def app_factory() -> FastAPI:
         inode_config=InodeConfig.model_validate_json(os.getenv("FLEETDOCTOR_INODE_RULE", "{}")),
         cpu_config=CpuConfig.model_validate_json(os.getenv("FLEETDOCTOR_CPU_RULE", "{}")),
         oom_config=OomConfig.model_validate_json(os.getenv("FLEETDOCTOR_OOM_RULE", "{}")),
+        fd_config=FdConfig.model_validate_json(os.getenv("FLEETDOCTOR_FD_RULE", "{}")),
         cgroup_paths=validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", "")),
     )

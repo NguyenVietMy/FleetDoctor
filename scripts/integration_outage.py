@@ -271,7 +271,21 @@ async def prove_outage(
                     )
                     current = await get("/diagnoses/" + incident["id"])
                     assert current["opening_evidence"] == incident["opening_evidence"]
-                    assert current["status"] == ("resolved" if healthy_seen >= 3 else "active")
+                    expected = "resolved" if healthy_seen >= 3 else "active"
+                    if current["status"] != expected:
+                        # The upstream ingest commit can become visible just before the proxy
+                        # resumes to annotate that same response as accepted. Permit only that
+                        # measured handoff; the next poll must still count all three responses.
+                        inflight_healthy = {
+                            row["sequence"]
+                            for row in attempts
+                            if row.get("http_status") is None and row["sequence"] in healthy_seqs
+                        }
+                        assert (
+                            current["status"] == "resolved"
+                            and healthy_seen < 3
+                            and healthy_seen + len(inflight_healthy) >= 3
+                        )
                     if time.monotonic() - restored > 25:
                         raise TimeoutError("three fresh recovery observations deadline")
                 proof["resolved"] = current

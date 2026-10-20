@@ -22,6 +22,7 @@ from fleetdoctor.agent import (
     refresh_fd_watch,
 )
 from fleetdoctor.collector import create_app
+from fleetdoctor.cpu import parse_process_stat
 from fleetdoctor.fd import (
     FdCollectionWorker,
     FdCollector,
@@ -641,7 +642,11 @@ def test_fd_worker_reaps_delayed_death_and_restarts_with_watches() -> None:
     retained = DelayedDeath()
     worker = FdCollectionWorker()
     worker.process = retained
-    watched = identity(77, 700)
+    # A fixed PID can belong to an unrelated process on the host runner.
+    # Configure and watch this test process so both refer to one known identity.
+    process = parse_process_stat(Path("/proc/self/stat").read_text())
+    watched = identity(process.pid, process.starttime)
+    configured = (watched.pid,)
     watch = WatchIdentity(
         boot_id=watched.boot_id,
         pid=watched.pid,
@@ -656,14 +661,14 @@ def test_fd_worker_reaps_delayed_death_and_restarts_with_watches() -> None:
         errors=["cpu_rate_baseline_unavailable"],
     )
     try:
-        unavailable = worker.collect(BOOT, cpu, (77,), (watch,), "available", 4, None)
+        unavailable = worker.collect(BOOT, cpu, configured, (watch,), "available", 4, None)
         assert unavailable.watch_coverage == "degraded"
         assert unavailable.observations[0].status == "unknown"
         assert unavailable.observations[0].configured is True
         assert unavailable.observations[0].errors == ["fd_collection_worker_stuck"]
 
         retained.alive = False
-        starting = worker.collect(BOOT, cpu, (77,), (watch,), "available", 4, None)
+        starting = worker.collect(BOOT, cpu, configured, (watch,), "available", 4, None)
         assert retained.closed
         assert len(starting.observations) == 1
         assert starting.observations[0].identity == watched
@@ -674,12 +679,16 @@ def test_fd_worker_reaps_delayed_death_and_restarts_with_watches() -> None:
             assert starting.watch_coverage == "degraded"
             assert starting.observations[0].status == "unknown"
             assert worker.wait_ready(5)
-            recovered = worker.collect(BOOT, cpu, (77,), (watch,), "available", 4, None)
+            recovered = worker.collect(BOOT, cpu, configured, (watch,), "available", 4, None)
         else:
             recovered = starting
         assert "fd_collection_worker_stuck" not in recovered.errors
         assert "fd_collection_worker_starting" not in recovered.errors
         assert len(recovered.observations) == 1
+        assert recovered.observations[0].identity == watched
+        assert recovered.observations[0].watched is True
+        assert recovered.observations[0].configured is True
+        assert recovered.watch_revision == 4
     finally:
         worker.close()
 

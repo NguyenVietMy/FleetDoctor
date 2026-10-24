@@ -65,6 +65,16 @@ jobs:
             [[ "$native_root" == /tmp/fleetdoctor-oom-ci.* && "$(dirname -- "$native_root")" == /tmp ]]
             sudo rm -rf -- "$native_root"
           fi
+      - name: Package protected network helper evidence
+        if: always()
+        run: |
+          proof_dir="$RUNNER_TEMP/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state"
+          proof_archive="$RUNNER_TEMP/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.tar.gz"
+          if sudo test -d "$proof_dir"; then
+            sudo tar -C "$proof_dir" -czf "$proof_archive" -- .
+            sudo chown "$(id -u):$(id -g)" "$proof_archive"
+            chmod 0600 "$proof_archive"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -75,7 +85,7 @@ jobs:
             ${{ runner.temp }}/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}.json
-            ${{ runner.temp }}/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state/**
+            ${{ runner.temp }}/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.tar.gz
             ${{ runner.temp }}/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task06-oom-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task06-oom-helper-${{ github.run_id }}-${{ github.run_attempt }}.json

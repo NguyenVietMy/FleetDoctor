@@ -1,10 +1,122 @@
+import asyncio
 from datetime import timedelta
+from typing import Any
 from uuid import uuid4
 
 import pytest
+from integration_outage import assert_recovery_response_cut, observe_recovery_response_cut
 from test_disk import LostAcknowledgementStore, Rig
 
 from fleetdoctor.schema import Delivery
+
+
+def recovery_evidence(sequence: int, usage: float) -> dict[str, Any]:
+    return {
+        "boot_id": "boot-a",
+        "agent_session_id": "session-a",
+        "sequence": sequence,
+        "block_available": True,
+        "filesystem": {
+            "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+            "block_usage_percent": usage,
+        },
+    }
+
+
+def recovery_opening() -> dict[str, Any]:
+    return {
+        "configuration": {
+            "recovery_percent": 90,
+            "consecutive_samples": 3,
+        },
+        "opening_evidence": recovery_evidence(0, 98),
+    }
+
+
+def recovery_attempt(sequence: int, status: str | None = "accepted") -> dict[str, Any]:
+    return {
+        "boot_id": "boot-a",
+        "agent_session_id": "session-a",
+        "sequence": sequence,
+        "status": status,
+    }
+
+
+def recovery_ticks() -> list[dict[str, Any]]:
+    return [
+        {"sequence": sequence, "usage": 10, "monotonic": float(sequence)} for sequence in (1, 2, 3)
+    ]
+
+
+def test_recovery_response_cut_counts_pending_third_response_annotation() -> None:
+    attempts = [recovery_attempt(1), recovery_attempt(2), recovery_attempt(3, None)]
+
+    async def detail() -> dict[str, Any]:
+        await asyncio.sleep(0)
+        return {
+            "status": "resolved",
+            "latest_evidence": recovery_evidence(3, 10),
+        }
+
+    current, cut = asyncio.run(
+        observe_recovery_response_cut(detail, recovery_opening(), attempts, recovery_ticks(), 0)
+    )
+    assert cut["accepted_at_response_sequences"] == [1, 2]
+    assert cut["response_proven_sequence"] == 3
+    assert cut["eligible_committed_sequences"] == [1, 2, 3]
+    assert_recovery_response_cut(current, cut)
+
+
+def test_recovery_response_cut_observes_new_tick_committed_during_awaited_get() -> None:
+    attempts = [recovery_attempt(1), recovery_attempt(2)]
+    ticks = recovery_ticks()[:2]
+
+    async def detail() -> dict[str, Any]:
+        await asyncio.sleep(0)
+        ticks.append({"sequence": 3, "usage": 10, "monotonic": 3.0})
+        attempts.append(recovery_attempt(3, None))
+        return {
+            "status": "resolved",
+            "latest_evidence": recovery_evidence(3, 10),
+        }
+
+    current, cut = asyncio.run(
+        observe_recovery_response_cut(detail, recovery_opening(), attempts, ticks, 0)
+    )
+    assert cut["healthy_tick_sequences"] == [1, 2, 3]
+    assert cut["accepted_at_response_sequences"] == [1, 2]
+    assert cut["response_proven_sequence"] == 3
+    assert cut["eligible_committed_count"] == 3
+    assert_recovery_response_cut(current, cut)
+
+
+def test_recovery_response_cut_excludes_third_commit_after_returned_evidence() -> None:
+    attempts = [recovery_attempt(1), recovery_attempt(2)]
+
+    async def detail() -> dict[str, Any]:
+        response = {"status": "active", "latest_evidence": recovery_evidence(2, 10)}
+        attempts.append(recovery_attempt(3))
+        return response
+
+    current, cut = asyncio.run(
+        observe_recovery_response_cut(detail, recovery_opening(), attempts, recovery_ticks(), 0)
+    )
+    assert cut["accepted_at_response_sequences"] == [1, 2]
+    assert cut["eligible_committed_count"] == 2
+    assert_recovery_response_cut(current, cut)
+
+
+def test_recovery_response_cut_rejects_true_early_resolution() -> None:
+    attempts = [recovery_attempt(1), recovery_attempt(2)]
+
+    async def detail() -> dict[str, Any]:
+        return {"status": "resolved", "latest_evidence": recovery_evidence(2, 10)}
+
+    current, cut = asyncio.run(
+        observe_recovery_response_cut(detail, recovery_opening(), attempts, recovery_ticks(), 0)
+    )
+    with pytest.raises(AssertionError, match="response/count cut mismatch"):
+        assert_recovery_response_cut(current, cut)
 
 
 def test_delivery_publication_compatibility_conflict_and_failed_commit() -> None:

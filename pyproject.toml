@@ -32,7 +32,7 @@ ignore = ["E501"]
 python_version = "3.11"
 platform = "linux"
 strict = true
-mypy_path = ["src", "deploy"]
+mypy_path = ["src", "deploy", "scripts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

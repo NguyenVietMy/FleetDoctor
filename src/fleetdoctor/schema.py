@@ -1,5 +1,6 @@
 """The versioned wire contract; missing observations are never zero-filled."""
 
+import ipaddress
 import re
 from datetime import datetime
 from typing import Annotated, Literal, Self
@@ -38,6 +39,16 @@ FD_UNITS = {
     "fd_growth_interval": "seconds",
 }
 UNITS_V4 = {**UNITS_V3, **FD_UNITS}
+NETWORK_UNITS = {
+    "network_loss": "packets_and_ratio",
+    "network_rtt": "milliseconds",
+    "tcp_counters": "count",
+    "tcp_retransmit_rate": "per_second",
+    "tcp_states": "instantaneous_count",
+    "interface_counters": "count",
+    "interface_counter_rate": "per_second",
+}
+UNITS_V5 = {**UNITS_V4, **NETWORK_UNITS}
 FIELDS = (
     "total_bytes",
     "free_bytes",
@@ -481,8 +492,234 @@ class MemoryObservation(WireModel):
         return self
 
 
+class NetworkProbeObservation(WireModel):
+    status: Literal["available", "unavailable", "unconfigured"]
+    target: str | None = Field(default=None, pattern=r"^(?:\d{1,3}\.){3}\d{1,3}$")
+    sent: Annotated[StrictInt, Field(ge=0, le=3)] | None = None
+    received: Annotated[StrictInt, Field(ge=0, le=3)] | None = None
+    lost: Annotated[StrictInt, Field(ge=0, le=3)] | None = None
+    loss_ratio: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | None = None
+    successful_sequences: list[Annotated[StrictInt, Field(ge=1, le=3)]] = Field(
+        default_factory=list, max_length=3
+    )
+    successful_rtts_ms: list[Annotated[float, Field(ge=0, allow_inf_nan=False)]] = Field(
+        default_factory=list, max_length=3
+    )
+    median_rtt_ms: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    route_status: Literal["available", "unavailable"] = "unavailable"
+    interface: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.:@-]{1,64}$")
+    interface_ifindex: Annotated[StrictInt, Field(ge=1, le=2**31 - 1)] | None = None
+    route_error: str | None = Field(default=None, min_length=1, max_length=128)
+    errors: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("target")
+    @classmethod
+    def canonical_target(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise ValueError("network target must be canonical IPv4") from exc
+        if (
+            address.version != 4
+            or str(address) != value
+            or address.is_unspecified
+            or address.is_multicast
+            or address.is_reserved
+            or value == "255.255.255.255"
+        ):
+            raise ValueError("network target must be usable canonical IPv4")
+        return value
+
+    @classmethod
+    def unavailable(cls, target: str | None, error: str) -> "NetworkProbeObservation":
+        return cls(status="unavailable", target=target, route_error=error, errors=[error])
+
+    @model_validator(mode="after")
+    def consistent_probe(self) -> Self:
+        measured = (self.sent, self.received, self.lost, self.loss_ratio)
+        if self.status == "available":
+            if self.target is None or any(value is None for value in measured):
+                raise ValueError("available network probe requires target and loss measurements")
+            assert self.sent is not None and self.received is not None and self.lost is not None
+            assert self.loss_ratio is not None
+            if self.sent != 3 or self.lost != self.sent - self.received:
+                raise ValueError("network probe packet counts disagree")
+            if abs(self.loss_ratio - self.lost / self.sent) > 0.000001:
+                raise ValueError("network probe loss ratio disagrees")
+            if (
+                len(self.successful_sequences) != self.received
+                or len(self.successful_rtts_ms) != self.received
+            ):
+                raise ValueError("network probe replies disagree with received count")
+            if len(set(self.successful_sequences)) != len(self.successful_sequences):
+                raise ValueError("network probe reply sequence is duplicated")
+            expected = None
+            if self.successful_rtts_ms:
+                ordered = sorted(self.successful_rtts_ms)
+                middle = len(ordered) // 2
+                expected = ordered[middle] if len(ordered) % 2 else sum(ordered[:2]) / 2
+            if (expected is None) != (self.median_rtt_ms is None) or (
+                expected is not None
+                and self.median_rtt_ms is not None
+                and abs(expected - self.median_rtt_ms) > 0.000001
+            ):
+                raise ValueError("network probe median must use successful replies")
+        elif (
+            any(value is not None for value in measured)
+            or self.successful_sequences
+            or self.successful_rtts_ms
+            or self.median_rtt_ms is not None
+        ):
+            raise ValueError("unavailable probe cannot carry measured loss or RTT")
+        if self.status == "unconfigured" and self.target is not None:
+            raise ValueError("unconfigured probe cannot carry a target")
+        if self.status != "available" and not self.errors:
+            raise ValueError("unavailable network probe requires an error")
+        if self.route_status == "available":
+            if (
+                self.interface is None
+                or self.interface_ifindex is None
+                or self.route_error is not None
+            ):
+                raise ValueError("available route attribution requires interface identity")
+        elif (
+            self.interface is not None
+            or self.interface_ifindex is not None
+            or self.route_error is None
+        ):
+            raise ValueError("unavailable route attribution requires only a reason")
+        if any(not error or len(error) > 128 for error in self.errors):
+            raise ValueError("network probe error must contain 1..128 characters")
+        return self
+
+
+class TcpNetworkObservation(WireModel):
+    scope: Literal["host"] = "host"
+    retrans_segs: Count | None = None
+    retrans_per_second: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    rate_interval_seconds: Annotated[float, Field(gt=0, le=10, allow_inf_nan=False)] | None = None
+    rate_status: Literal[
+        "available",
+        "baseline",
+        "baseline_expired",
+        "counter_reset",
+        "identity_changed",
+        "nonpositive_interval",
+        "unavailable",
+    ] = "unavailable"
+    curr_estab: Count | None = None
+    state_counts: dict[str, Count] = Field(default_factory=dict, max_length=11)
+    state_inventory: Literal["complete", "partial", "unavailable"] = "unavailable"
+    errors: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def consistent_tcp(self) -> Self:
+        if self.rate_status == "available":
+            if self.retrans_per_second is None or self.rate_interval_seconds is None:
+                raise ValueError("available retransmit rate requires value and interval")
+        elif self.retrans_per_second is not None or self.rate_interval_seconds is not None:
+            raise ValueError("unavailable retransmit rate cannot carry a value")
+        allowed = {
+            "established",
+            "syn_sent",
+            "syn_recv",
+            "fin_wait1",
+            "fin_wait2",
+            "time_wait",
+            "close",
+            "close_wait",
+            "last_ack",
+            "listen",
+            "closing",
+        }
+        if set(self.state_counts) - allowed:
+            raise ValueError("unsupported TCP state")
+        if self.state_inventory == "unavailable" and self.state_counts:
+            raise ValueError("unavailable TCP inventory cannot carry counts")
+        if (self.retrans_segs is None or self.curr_estab is None) and not self.errors:
+            raise ValueError("unavailable TCP counters require an error")
+        return self
+
+
+class InterfaceNetworkObservation(WireModel):
+    name: str = Field(pattern=r"^[a-zA-Z0-9_.:@-]{1,64}$")
+    ifindex: Annotated[StrictInt, Field(ge=1, le=2**31 - 1)]
+    rx_errors: Count
+    rx_dropped: Count
+    tx_errors: Count
+    tx_dropped: Count
+    rx_errors_per_second: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    rx_dropped_per_second: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    tx_errors_per_second: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    tx_dropped_per_second: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    rate_interval_seconds: Annotated[float, Field(gt=0, le=10, allow_inf_nan=False)] | None = None
+    rate_status: dict[
+        str,
+        Literal[
+            "available",
+            "baseline",
+            "baseline_expired",
+            "counter_reset",
+            "identity_changed",
+            "nonpositive_interval",
+        ],
+    ] = Field(default_factory=dict, min_length=4, max_length=4)
+
+    @model_validator(mode="after")
+    def consistent_interface(self) -> Self:
+        rates = (
+            self.rx_errors_per_second,
+            self.rx_dropped_per_second,
+            self.tx_errors_per_second,
+            self.tx_dropped_per_second,
+        )
+        names = ("rx_errors", "rx_dropped", "tx_errors", "tx_dropped")
+        if set(self.rate_status) != set(names):
+            raise ValueError("interface rate status must cover every cumulative counter")
+        for name, value in zip(names, rates, strict=True):
+            if (self.rate_status[name] == "available") != (value is not None):
+                raise ValueError("interface rate value and field status disagree")
+        if any(value is not None for value in rates) != (self.rate_interval_seconds is not None):
+            raise ValueError("interface rate interval must accompany available fields")
+        return self
+
+
+class NetworkObservation(WireModel):
+    probe: NetworkProbeObservation
+    tcp: TcpNetworkObservation
+    interfaces: list[InterfaceNetworkObservation] = Field(default_factory=list, max_length=16)
+    interface_coverage: Literal["complete", "partial", "unavailable"] = "unavailable"
+    elapsed_seconds: Annotated[float, Field(ge=0, le=3, allow_inf_nan=False)] | None = None
+    context_trimmed: bool = False
+    errors: list[str] = Field(default_factory=list, max_length=8)
+
+    @classmethod
+    def unavailable(cls, target: str | None, error: str) -> "NetworkObservation":
+        probe = NetworkProbeObservation.unavailable(target, error)
+        return cls(
+            probe=probe,
+            tcp=TcpNetworkObservation(errors=[error]),
+            interface_coverage="unavailable",
+            errors=[error],
+        )
+
+    @model_validator(mode="after")
+    def consistent_network(self) -> Self:
+        if len({item.name for item in self.interfaces}) != len(self.interfaces):
+            raise ValueError("duplicate network interface")
+        if self.interface_coverage == "unavailable" and self.interfaces:
+            raise ValueError("unavailable interface coverage cannot carry records")
+        if any(not error or len(error) > 128 for error in self.errors):
+            raise ValueError("network error must contain 1..128 characters")
+        if len(self.model_dump_json().encode("utf-8")) > 8 * 1024:
+            raise ValueError("network observation exceeds 8KiB")
+        return self
+
+
 class Sample(WireModel):
-    schema_version: Literal[1, 2, 3, 4]
+    schema_version: Literal[1, 2, 3, 4, 5]
     node_id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
     boot_id: UUID
     agent_session_id: UUID
@@ -493,6 +730,7 @@ class Sample(WireModel):
     cpu: CpuObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     memory: MemoryObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     fd: FdObservation | None = Field(default=None, exclude_if=lambda value: value is None)
+    network: NetworkObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     delivery: Delivery | None = None
 
     @field_validator("observed_at")
@@ -505,7 +743,7 @@ class Sample(WireModel):
     @field_validator("units")
     @classmethod
     def exact_units(cls, value: dict[str, str]) -> dict[str, str]:
-        if value not in (UNITS, UNITS_V2, UNITS_V3, UNITS_V4):
+        if value not in (UNITS, UNITS_V2, UNITS_V3, UNITS_V4, UNITS_V5):
             raise ValueError("unsupported metric units")
         return value
 
@@ -516,6 +754,7 @@ class Sample(WireModel):
             or self.cpu is not None
             or self.memory is not None
             or self.fd is not None
+            or self.network is not None
         ):
             raise ValueError("schema v1 cannot contain CPU telemetry")
         if self.schema_version == 2 and (
@@ -523,16 +762,35 @@ class Sample(WireModel):
             or self.cpu is None
             or self.memory is not None
             or self.fd is not None
+            or self.network is not None
         ):
             raise ValueError("schema v2 requires CPU telemetry and v2 units")
         if self.schema_version == 3 and (
-            self.units != UNITS_V3 or self.cpu is None or self.memory is None or self.fd is not None
+            self.units != UNITS_V3
+            or self.cpu is None
+            or self.memory is None
+            or self.fd is not None
+            or self.network is not None
         ):
             raise ValueError("schema v3 requires CPU and memory telemetry and v3 units")
         if self.schema_version == 4 and (
-            self.units != UNITS_V4 or self.cpu is None or self.memory is None or self.fd is None
+            self.units != UNITS_V4
+            or self.cpu is None
+            or self.memory is None
+            or self.fd is None
+            or self.network is not None
         ):
             raise ValueError("schema v4 requires CPU, memory, FD telemetry and v4 units")
+        if self.schema_version == 5 and (
+            self.units != UNITS_V5
+            or self.cpu is None
+            or self.memory is None
+            or self.fd is None
+            or self.network is None
+        ):
+            raise ValueError(
+                "schema v5 requires CPU, memory, FD and network telemetry and v5 units"
+            )
         if self.fd is not None and any(
             item.identity.boot_id != self.boot_id
             for item in self.fd.observations

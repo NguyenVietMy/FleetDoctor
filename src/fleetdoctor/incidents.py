@@ -76,6 +76,22 @@ class FdConfig(BaseModel):
         return self
 
 
+class NetworkConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+    loss_trigger_packets: int = Field(default=1, ge=1, le=3, strict=True)
+    rtt_trigger_ms: float = Field(default=200, gt=0, le=60_000)
+    recovery_rtt_ms: float = Field(default=150, ge=0, le=60_000)
+    consecutive_samples: int = Field(default=3, ge=1, le=120, strict=True)
+    max_gap_seconds: float = Field(default=10, gt=0, le=10)
+    severity: Literal["info", "warning", "critical"] = "warning"
+
+    @model_validator(mode="after")
+    def hysteresis(self) -> Self:
+        if self.recovery_rtt_ms >= self.rtt_trigger_ms:
+            raise ValueError("network RTT recovery must be below trigger")
+        return self
+
+
 class Incident(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: UUID
@@ -87,11 +103,12 @@ class Incident(BaseModel):
         "cpu_saturation",
         "workload_oom",
         "fd_pressure",
+        "network_path_degradation",
     ] = "disk_block_exhaustion"
     status: Literal["active", "resolved"] = "active"
     severity: Literal["info", "warning", "critical"] = "critical"
     diagnosis: str
-    configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig
+    configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig
     opening_evidence: dict[str, JsonValue]
     latest_evidence: dict[str, JsonValue]
     opened_at: datetime
@@ -111,7 +128,7 @@ class Incident(BaseModel):
         if not isinstance(value, dict) or not isinstance(value.get("configuration"), dict):
             return value
         rule = value.get("rule", "disk_block_exhaustion")
-        configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig
+        configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig
         if rule == "disk_block_exhaustion":
             configuration = DiskConfig.model_validate(value["configuration"])
         elif rule == "inode_exhaustion":
@@ -122,6 +139,8 @@ class Incident(BaseModel):
             configuration = OomConfig.model_validate(value["configuration"])
         elif rule == "fd_pressure":
             configuration = FdConfig.model_validate(value["configuration"])
+        elif rule == "network_path_degradation":
+            configuration = NetworkConfig.model_validate(value["configuration"])
         else:
             return value
         result = dict(value)
@@ -136,6 +155,7 @@ class Incident(BaseModel):
             "cpu_saturation": CpuConfig,
             "workload_oom": OomConfig,
             "fd_pressure": FdConfig,
+            "network_path_degradation": NetworkConfig,
         }[self.rule]
         if not isinstance(self.configuration, expected):
             raise ValueError("incident rule and configuration disagree")
@@ -145,6 +165,7 @@ class Incident(BaseModel):
             "cpu_saturation": "cpu_available",
             "workload_oom": "memory_available",
             "fd_pressure": "fd_available",
+            "network_path_degradation": "network_available",
         }[self.rule]
         if availability not in self.opening_evidence or availability not in self.latest_evidence:
             raise ValueError("incident evidence does not match rule")
@@ -159,6 +180,8 @@ class Incident(BaseModel):
                 raise ValueError("resolved FD incident requires a resolution reason")
             if self.status == "active" and self.resolution_reason is not None:
                 raise ValueError("active FD incident cannot have a resolution reason")
+        if self.rule == "network_path_degradation" and not self.resource.startswith("ipv4:"):
+            raise ValueError("network path resource must be a configured IPv4 target")
         if not self.investigation_steps or any(
             len(step) > 512 for step in self.investigation_steps
         ):
@@ -174,6 +197,7 @@ class Incident(BaseModel):
             "cpu_saturation": "cpu_available",
             "workload_oom": "memory_available",
             "fd_pressure": "fd_available",
+            "network_path_degradation": "network_available",
         }[self.rule]
         result.update(
             evidence_age_seconds=max(0, age),

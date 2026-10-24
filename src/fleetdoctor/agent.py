@@ -9,7 +9,7 @@ import time
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
@@ -25,19 +25,23 @@ from fleetdoctor.fd import (
     WatchResponse,
 )
 from fleetdoctor.memory import MemoryCollectionWorker, validate_cgroup_paths
+from fleetdoctor.network import NetworkCollectionWorker, configured_target
 from fleetdoctor.schema import (
     UNITS,
     UNITS_V2,
     UNITS_V3,
     UNITS_V4,
+    UNITS_V5,
     CpuObservation,
     Delivery,
     FdObservation,
     FdProcessObservation,
     Filesystem,
     MemoryObservation,
+    NetworkObservation,
     Sample,
 )
+from fleetdoctor.supervisor import CollectionSupervisor
 
 LOG = logging.getLogger(__name__)
 
@@ -68,13 +72,18 @@ def make_sample(
     cpu: CpuObservation | None = None,
     memory: MemoryObservation | None = None,
     fd: FdObservation | None = None,
+    network: NetworkObservation | None = None,
 ) -> Sample:
+    if network is not None and (fd is None or memory is None or cpu is None):
+        raise ValueError("schema v5 network samples require CPU, memory, and FD telemetry")
     if fd is not None and (memory is None or cpu is None):
         raise ValueError("schema v4 FD samples require CPU and memory telemetry")
     if memory is not None and cpu is None:
         raise ValueError("schema v3 memory samples require CPU telemetry")
     return Sample(
-        schema_version=4
+        schema_version=5
+        if network is not None
+        else 4
         if fd is not None
         else (3 if memory is not None else (2 if cpu is not None else 1)),
         node_id=node,
@@ -82,13 +91,16 @@ def make_sample(
         agent_session_id=session,
         sequence=sequence,
         observed_at=observed_at or datetime.now(UTC),
-        units=UNITS_V4
+        units=UNITS_V5
+        if network is not None
+        else UNITS_V4
         if fd is not None
         else (UNITS_V3 if memory is not None else (UNITS_V2 if cpu is not None else UNITS)),
         filesystems=filesystems,
         cpu=cpu,
         memory=memory,
         fd=fd,
+        network=network,
     )
 
 
@@ -147,6 +159,18 @@ def _max_enveloped_payload_size(sample: Sample) -> int:
 def payload_bounded_sample(sample: Sample) -> Sample:
     if _max_enveloped_payload_size(sample) <= MAX_BODY:
         return sample
+    if sample.network is not None:
+        network = sample.network.model_copy(deep=True)
+        network.interfaces = []
+        network.interface_coverage = "partial"
+        network.context_trimmed = True
+        network.tcp.state_counts = {}
+        network.tcp.state_inventory = "partial"
+        network.errors = [error for error in network.errors if error != "payload_budget"][:7]
+        network.errors.append("payload_budget")
+        sample = sample.model_copy(update={"network": network})
+        if _max_enveloped_payload_size(sample) <= MAX_BODY:
+            return sample
     if sample.fd is None:
         raise PayloadTooLarge("sample exceeds 64KiB without optional FD context")
     retained = []
@@ -206,6 +230,12 @@ def next_tick(scheduled: float, now: float, interval: float = 5.0) -> float:
     return candidate if candidate > now else now + interval
 
 
+async def _drain_collection_tasks(tasks: list[asyncio.Task[Any]]) -> None:
+    """Keep worker calls alive until bounded completion before their owners may close."""
+    if tasks:
+        await asyncio.gather(*(asyncio.shield(task) for task in tasks), return_exceptions=True)
+
+
 async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], once: bool) -> None:
     boot = UUID(Path("/proc/sys/kernel/random/boot_id").read_text().strip())
     session = uuid4()
@@ -213,6 +243,15 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
     cpu_worker = CpuCollectionWorker() if os.name == "posix" else None
     memory_worker = MemoryCollectionWorker() if os.name == "posix" else None
     fd_worker = FdCollectionWorker() if os.name == "posix" else None
+    network_worker = NetworkCollectionWorker() if os.name == "posix" else None
+    supervisor = CollectionSupervisor() if os.name == "posix" else None
+    if supervisor is not None:
+        cpu_worker = memory_worker = fd_worker = network_worker = None
+    target = configured_target(
+        os.getenv("FLEETDOCTOR_NETWORK_TARGET", ""),
+        url,
+        allow_loopback=os.getenv("FLEETDOCTOR_ALLOW_LOOPBACK_NETWORK_TARGET") == "1",
+    )
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -231,6 +270,9 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
             cpu_worker=cpu_worker,
             memory_worker=memory_worker,
             fd_worker=fd_worker,
+            network_worker=network_worker,
+            network_target=target,
+            supervisor=supervisor,
         )
     finally:
         worker.close()
@@ -240,6 +282,10 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
             memory_worker.close()
         if fd_worker is not None:
             fd_worker.close()
+        if network_worker is not None:
+            network_worker.close()
+        if supervisor is not None:
+            supervisor.close()
 
 
 async def collect_loop(
@@ -256,6 +302,9 @@ async def collect_loop(
     cpu_worker: CpuCollectionWorker | None = None,
     memory_worker: MemoryCollectionWorker | None = None,
     fd_worker: FdCollectionWorker | None = None,
+    network_worker: NetworkCollectionWorker | None = None,
+    network_target: str | None = None,
+    supervisor: CollectionSupervisor | None = None,
 ) -> None:
     """Also used by the service proof with an ordinary synthetic collection worker."""
     sequence = 0
@@ -278,70 +327,116 @@ async def collect_loop(
                     max_connections=1, max_keepalive_connections=1, keepalive_expiry=2
                 ),
             )
-            if fd_worker is not None
+            if fd_worker is not None or supervisor is not None
             else None
         )
         try:
             while not stopped.is_set():
                 watch_coverage: Literal["available", "degraded", "unavailable"] = "unavailable"
                 watch_error = None
-                if fd_worker is not None:
+                if fd_worker is not None or supervisor is not None:
                     assert watch_client is not None
                     watch_cache, watch_coverage, watch_error = await refresh_fd_watch(
                         watch_client, url, node, token, watch_cache
                     )
                 observed_at = datetime.now(UTC)
-                collection = asyncio.create_task(asyncio.to_thread(worker.collect, paths))
-                try:
-                    filesystems = await asyncio.shield(collection)
-                except asyncio.CancelledError:
-                    # The worker cannot be closed concurrently with its outstanding call.
-                    await collection
-                    raise
-                cpu = None
-                if cpu_worker is not None:
-                    configured = configured_cpu_pids(os.getenv("FLEETDOCTOR_CPU_PIDS", ""))
-                    cpu_collection = asyncio.create_task(
-                        asyncio.to_thread(cpu_worker.collect, configured)
-                    )
-                    try:
-                        cpu = await asyncio.shield(cpu_collection)
-                    except asyncio.CancelledError:
-                        await cpu_collection
-                        raise
-                memory = None
-                if memory_worker is not None:
-                    cgroups = validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", ""))
-                    memory_collection = asyncio.create_task(
-                        asyncio.to_thread(memory_worker.collect, cgroups)
-                    )
-                    try:
-                        memory = await asyncio.shield(memory_collection)
-                    except asyncio.CancelledError:
-                        await memory_collection
-                        raise
-                fd = None
-                if fd_worker is not None and cpu is not None:
-                    configured = configured_cpu_pids(os.getenv("FLEETDOCTOR_CPU_PIDS", ""))
-                    cached_watches: tuple[WatchIdentity, ...] = (
-                        tuple(watch_cache.watches) if watch_cache is not None else ()
-                    )
-                    fd_collection = asyncio.create_task(
+                configured = configured_cpu_pids(os.getenv("FLEETDOCTOR_CPU_PIDS", ""))
+                cgroups = validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", ""))
+                cached_watches: tuple[WatchIdentity, ...] = (
+                    tuple(watch_cache.watches) if watch_cache is not None else ()
+                )
+                filesystems: list[Filesystem]
+                cpu: CpuObservation | None
+                memory: MemoryObservation | None
+                fd: FdObservation | None
+                network: NetworkObservation | None
+                if supervisor is not None:
+                    supervisor_collection = asyncio.create_task(
                         asyncio.to_thread(
-                            fd_worker.collect,
+                            supervisor.collect_all,
                             boot,
-                            cpu,
+                            session,
+                            sequence,
+                            paths,
                             configured,
+                            cgroups,
                             cached_watches,
                             watch_coverage,
                             watch_cache.revision if watch_cache is not None else None,
                             watch_error,
+                            network_target,
                         )
                     )
                     try:
-                        fd = await asyncio.shield(fd_collection)
-                    except asyncio.CancelledError:
-                        await fd_collection
+                        collected = await asyncio.shield(supervisor_collection)
+                    except BaseException:
+                        await _drain_collection_tasks([supervisor_collection])
+                        raise
+                    filesystems = collected.filesystems
+                    cpu, memory, fd, network = (
+                        collected.cpu,
+                        collected.memory,
+                        collected.fd,
+                        collected.network,
+                    )
+                else:
+                    filesystem_collection = asyncio.create_task(
+                        asyncio.to_thread(worker.collect, paths)
+                    )
+                    cpu_collection = (
+                        asyncio.create_task(asyncio.to_thread(cpu_worker.collect, configured))
+                        if cpu_worker is not None
+                        else None
+                    )
+                    memory_collection = (
+                        asyncio.create_task(asyncio.to_thread(memory_worker.collect, cgroups))
+                        if memory_worker is not None
+                        else None
+                    )
+                    network_collection = (
+                        asyncio.create_task(
+                            asyncio.to_thread(network_worker.collect, network_target)
+                        )
+                        if network_worker is not None
+                        else None
+                    )
+                    launched: list[asyncio.Task[Any]] = [
+                        task
+                        for task in (
+                            filesystem_collection,
+                            cpu_collection,
+                            memory_collection,
+                            network_collection,
+                        )
+                        if task is not None
+                    ]
+                    try:
+                        filesystems = await asyncio.shield(filesystem_collection)
+                        cpu = await asyncio.shield(cpu_collection) if cpu_collection else None
+                        memory = (
+                            await asyncio.shield(memory_collection) if memory_collection else None
+                        )
+                        fd = None
+                        if fd_worker is not None and cpu is not None:
+                            fd_collection = asyncio.create_task(
+                                asyncio.to_thread(
+                                    fd_worker.collect,
+                                    boot,
+                                    cpu,
+                                    configured,
+                                    cached_watches,
+                                    watch_coverage,
+                                    watch_cache.revision if watch_cache is not None else None,
+                                    watch_error,
+                                )
+                            )
+                            launched.append(fd_collection)
+                            fd = await asyncio.shield(fd_collection)
+                        network = (
+                            await asyncio.shield(network_collection) if network_collection else None
+                        )
+                    except BaseException:
+                        await _drain_collection_tasks(launched)
                         raise
                 sample = make_sample(
                     node,
@@ -353,6 +448,7 @@ async def collect_loop(
                     cpu=cpu,
                     memory=memory,
                     fd=fd,
+                    network=network,
                 )
                 enqueue_bounded_sample(queue, sample, datetime.now(UTC))
                 if once:
@@ -393,6 +489,11 @@ def main() -> None:
         raise ValueError("configure a token and private-IP HTTP collector URL")
     configured_cpu_pids(os.getenv("FLEETDOCTOR_CPU_PIDS", ""))
     validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", ""))
+    configured_target(
+        os.getenv("FLEETDOCTOR_NETWORK_TARGET", ""),
+        url,
+        allow_loopback=os.getenv("FLEETDOCTOR_ALLOW_LOOPBACK_NETWORK_TARGET") == "1",
+    )
     make_sample(
         node,
         uuid4(),

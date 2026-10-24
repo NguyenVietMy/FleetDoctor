@@ -242,7 +242,7 @@
     },
     {
       "id": 20,
-      "title": "Disk, inode, CPU, and OOM incident lifecycle",
+      "title": "Node incident lifecycle including network paths",
       "type": "table",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -258,7 +258,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT id::text, node_id, resource, rule, severity, status, opened_at, observed_at, updated_at, resolved_at, (evidence_reloaded OR now()-observed_at > interval '15 seconds' OR observed_at-now() > interval '2 seconds') AS evidence_stale, CASE rule WHEN 'cpu_saturation' THEN (record->'latest_evidence'->>'cpu_available')::boolean WHEN 'workload_oom' THEN (record->'latest_evidence'->>'memory_available')::boolean WHEN 'inode_exhaustion' THEN (record->'latest_evidence'->>'inode_available')::boolean WHEN 'fd_pressure' THEN (record->'latest_evidence'->>'fd_available')::boolean ELSE (record->'latest_evidence'->>'block_available')::boolean END AS evidence_available FROM incidents WHERE status ~ '${status:raw}' AND node_id = ${node:sqlstring} ORDER BY opened_at DESC,id DESC LIMIT 100",
+          "rawSql": "SELECT id::text, node_id, resource, rule, severity, status, opened_at, observed_at, updated_at, resolved_at, (evidence_reloaded OR now()-observed_at > interval '15 seconds' OR observed_at-now() > interval '2 seconds') AS evidence_stale, CASE rule WHEN 'cpu_saturation' THEN (record->'latest_evidence'->>'cpu_available')::boolean WHEN 'workload_oom' THEN (record->'latest_evidence'->>'memory_available')::boolean WHEN 'inode_exhaustion' THEN (record->'latest_evidence'->>'inode_available')::boolean WHEN 'fd_pressure' THEN (record->'latest_evidence'->>'fd_available')::boolean WHEN 'network_path_degradation' THEN (record->'latest_evidence'->>'network_available')::boolean ELSE (record->'latest_evidence'->>'block_available')::boolean END AS evidence_available FROM incidents WHERE status ~ '${status:raw}' AND node_id = ${node:sqlstring} ORDER BY opened_at DESC,id DESC LIMIT 100",
           "editorMode": "code"
         }
       ],
@@ -281,7 +281,7 @@
     },
     {
       "id": 21,
-      "title": "Disk, inode, CPU, and OOM evidence and investigation steps",
+      "title": "Node incident evidence and investigation steps",
       "type": "table",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -599,6 +599,97 @@
       }],
       "fieldConfig": {"defaults": {"custom": {"cellOptions": {"type": "auto"}, "wrapText": true, "filterable": false, "inspect": true}}, "overrides": [{"matcher": {"id": "byName", "options": "field"}, "properties": [{"id": "custom.width", "value": 300}]}]},
       "options": {"showHeader": true, "cellHeight": "md", "footer": {"show": false}}
+    },
+    {
+      "id": 70,
+      "title": "Network packet loss",
+      "description": "Measured three-echo loss. Unavailable collection is absent rather than rendered as zero.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 152, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_network_probe_loss_ratio{node=\"$node\"}", "refId": "A", "legendFormat": "loss"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 71,
+      "title": "Network successful-reply median RTT",
+      "description": "Median of successful replies only; no-reply and unavailable probes omit RTT.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 152, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_network_probe_median_rtt_seconds{node=\"$node\"}", "refId": "A", "legendFormat": "median RTT"}],
+      "fieldConfig": {"defaults": {"unit": "s", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 72,
+      "title": "Network collection and attribution coverage",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 160, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "fleetdoctor_network_probe_coverage_ratio{node=\"$node\"}", "refId": "A", "legendFormat": "probe"},
+        {"expr": "fleetdoctor_network_route_attribution_available{node=\"$node\"}", "refId": "B", "legendFormat": "route"},
+        {"expr": "fleetdoctor_network_admission_capacity_available{node=\"$node\"}", "refId": "C", "legendFormat": "capacity"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 73,
+      "title": "Host TCP retransmit rate",
+      "description": "Host-wide cumulative retransmit delta rate; context only, not attributed to the target or interface.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 160, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_network_tcp_retransmits_per_second{node=\"$node\"}", "refId": "A", "legendFormat": "retransmits/s"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 74,
+      "title": "Instantaneous TCP connection states",
+      "description": "Current host socket inventory gauges; never counter rates.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 168, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "fleetdoctor_network_tcp_curr_estab{node=\"$node\"}", "refId": "A", "legendFormat": "CurrEstab"},
+        {"expr": "fleetdoctor_network_tcp_state_connections{node=\"$node\"}", "refId": "B", "legendFormat": "{{state}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 75,
+      "title": "Interface error and drop rates",
+      "description": "Per-interface context rates with bounded interface labels; not asserted as path causation.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 168, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "fleetdoctor_network_interface_rx_errors_per_second{node=\"$node\"}", "refId": "A", "legendFormat": "rx errors {{interface}}"},
+        {"expr": "fleetdoctor_network_interface_rx_dropped_per_second{node=\"$node\"}", "refId": "B", "legendFormat": "rx drops {{interface}}"},
+        {"expr": "fleetdoctor_network_interface_tx_errors_per_second{node=\"$node\"}", "refId": "C", "legendFormat": "tx errors {{interface}}"},
+        {"expr": "fleetdoctor_network_interface_tx_dropped_per_second{node=\"$node\"}", "refId": "D", "legendFormat": "tx drops {{interface}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 76,
+      "title": "Active network path incidents",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 176, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_active_incidents{node=\"$node\",rule=\"network_path_degradation\"}", "refId": "A", "legendFormat": "active"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 77,
+      "title": "Network path incident evidence",
+      "description": "Latest matching incident with frozen configuration, measured opening/latest probe, scoped context, diagnosis and investigation steps.",
+      "type": "table",
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "incidents"},
+      "gridPos": {"x": 0, "y": 184, "w": 24, "h": 30},
+      "targets": [{"refId": "A", "format": "table", "rawQuery": true, "rawSql": "WITH selected AS (SELECT id,status,observed_at,evidence_reloaded,record FROM incidents WHERE rule='network_path_degradation' AND status ~ '${status:raw}' AND node_id=${node:sqlstring} ORDER BY opened_at DESC,id DESC LIMIT 1), details AS (SELECT detail.ordinal,detail.field,detail.value FROM selected CROSS JOIN LATERAL (VALUES (10,'Incident ID',id::text),(20,'Status',status),(30,'Target resource',COALESCE(record->>'resource','unavailable')),(40,'Frozen loss / RTT trigger / RTT recovery',COALESCE(record->'configuration'->>'loss_trigger_packets','unavailable')||' packets / '||COALESCE(record->'configuration'->>'rtt_trigger_ms','unavailable')||' ms / '||COALESCE(record->'configuration'->>'recovery_rtt_ms','unavailable')||' ms'),(50,'Frozen confirmations / max gap / severity',COALESCE(record->'configuration'->>'consecutive_samples','unavailable')||' / '||COALESCE(record->'configuration'->>'max_gap_seconds','unavailable')||' s / '||COALESCE(record->'configuration'->>'severity','unavailable')),(60,'Opening sent / received / lost',COALESCE(record->'opening_evidence'->'probe'->>'sent','unavailable')||' / '||COALESCE(record->'opening_evidence'->'probe'->>'received','unavailable')||' / '||COALESCE(record->'opening_evidence'->'probe'->>'lost','unavailable')),(70,'Opening successful-reply median RTT',COALESCE(record->'opening_evidence'->'probe'->>'median_rtt_ms','unavailable')||CASE WHEN record->'opening_evidence'->'probe'->>'median_rtt_ms' IS NULL THEN '' ELSE ' ms' END),(80,'Latest probe status / sent / received / lost',COALESCE(record->'latest_evidence'->'probe'->>'status','unavailable')||' / '||COALESCE(record->'latest_evidence'->'probe'->>'sent','unavailable')||' / '||COALESCE(record->'latest_evidence'->'probe'->>'received','unavailable')||' / '||COALESCE(record->'latest_evidence'->'probe'->>'lost','unavailable')),(90,'Latest median RTT / unavailable reasons',COALESCE(record->'latest_evidence'->'probe'->>'median_rtt_ms','unavailable')||CASE WHEN record->'latest_evidence'->'probe'->>'median_rtt_ms' IS NULL THEN '' ELSE ' ms' END||' / '||COALESCE((record->'latest_evidence'->'probe'->'errors')::text,'[]')),(100,'Route interface / ifindex / reason',COALESCE(record->'latest_evidence'->'probe'->>'interface','unknown')||' / '||COALESCE(record->'latest_evidence'->'probe'->>'interface_ifindex','unknown')||' / '||COALESCE(record->'latest_evidence'->'probe'->>'route_error',record->'latest_evidence'->'coverage'->>'route_error',record->'latest_evidence'->'coverage'->>'limitation',CASE WHEN record->'latest_evidence'->'coverage'->>'route'='available' THEN 'available' ELSE 'unavailable' END)),(110,'Host retransmits total / per second',COALESCE(record->'latest_evidence'->'tcp'->>'retrans_segs','unavailable')||' / '||COALESCE(record->'latest_evidence'->'tcp'->>'retrans_per_second','unavailable')),(120,'Instantaneous CurrEstab / state counts',COALESCE(record->'latest_evidence'->'tcp'->>'curr_estab','unavailable')||' / '||COALESCE((record->'latest_evidence'->'tcp'->'state_counts')::text,'unavailable')),(130,'Interface records / first interface context',COALESCE(jsonb_array_length(COALESCE(record->'latest_evidence'->'interfaces','[]'::jsonb))::text,'0')||' / '||COALESCE(record->'latest_evidence'->'interfaces'->0->>'name','unavailable')||' rxerr='||COALESCE(record->'latest_evidence'->'interfaces'->0->>'rx_errors','unavailable')||' rxdrop='||COALESCE(record->'latest_evidence'->'interfaces'->0->>'rx_dropped','unavailable')||' txerr='||COALESCE(record->'latest_evidence'->'interfaces'->0->>'tx_errors','unavailable')||' txdrop='||COALESCE(record->'latest_evidence'->'interfaces'->0->>'tx_dropped','unavailable')),(140,'Coverage / counter scope',COALESCE(record->'latest_evidence'->'coverage'->>'probe','unavailable')||' / host='||COALESCE(record->'latest_evidence'->'coverage'->>'host_counters','unavailable')||' / interface='||COALESCE(record->'latest_evidence'->'coverage'->>'interface_counters','unavailable')),(150,'Evidence stale',(evidence_reloaded OR now()-observed_at > interval '15 seconds' OR observed_at-now() > interval '2 seconds')::text),(160,'Diagnosis',COALESCE(record->>'diagnosis','unavailable'))) AS detail(ordinal,field,value)), steps AS (SELECT 200+step.ordinality::integer AS ordinal,'Investigation step '||step.ordinality::text AS field,step.value FROM selected CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(record->'investigation_steps','[]'::jsonb)) WITH ORDINALITY AS step(value,ordinality)) SELECT display.field,display.value FROM (SELECT ordinal,field,value FROM details UNION ALL SELECT ordinal,field,value FROM steps) AS display ORDER BY display.ordinal"}],
+      "fieldConfig": {"defaults": {"custom": {"cellOptions": {"type": "auto"}, "wrapText": true, "inspect": true}}, "overrides": []},
+      "options": {"showHeader": true, "cellHeight": "md"}
     }
   ]
 }

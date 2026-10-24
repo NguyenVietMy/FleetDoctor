@@ -21,6 +21,7 @@ from integration_disk import PATH as DISK_PATH
 from integration_disk import prove
 from integration_fd import prove as prove_fd
 from integration_inode import prove as prove_inode
+from integration_network import prove as prove_network
 from integration_oom import CGROUP as OOM_CGROUP
 from integration_oom import MISSING_CGROUP as OOM_MISSING_CGROUP
 from integration_oom import prove as prove_oom
@@ -264,6 +265,8 @@ def main() -> None:
                         if "bytes" in expr
                         else "percentunit"
                         if "ratio" in expr
+                        else "ops"
+                        if "_per_second" in expr
                         else "s"
                         if "seconds" in expr
                         else "short"
@@ -349,6 +352,8 @@ def main() -> None:
             prove_oom(api, prom, grafana, values, compose, evidence["oom_incidents"])
             evidence["fd_incidents"] = {}
             prove_fd(api, prom, grafana, values, compose, evidence["fd_incidents"], stat)
+            evidence["network_incidents"] = {}
+            prove_network(api, prom, values, compose, evidence["network_incidents"])
             evidence["outage_and_replay"] = {}
             asyncio.run(prove_outage(api, prom, grafana, values, evidence["outage_and_replay"]))
             evidence["source_after"] = source_manifest()

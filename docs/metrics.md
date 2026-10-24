@@ -1,6 +1,8 @@
 # Filesystem samples and freshness
 
-The host agent uses `os.statvfs` for each configured absolute path, default `/`. These fields are Linux `statvfs` counters, not a `/proc` text parser. Fixture data in `tests/fixtures/statvfs.json` is explicitly synthetic and includes reserved blocks, zero capacity and malformed counters. Kernel OOM/process/network collectors are later slices.
+Schema v5 preserves the explicit v1-v4 wire contracts and adds bounded network observations. Network probe loss is available only for a valid three-echo measurement; no reply is measured `3/3` loss with RTT absent, while unavailable collection exports coverage without false loss or RTT. Successful RTT is a true median of reply lines. TCP retransmits and interface error/drop fields are cumulative counters with per-second rates. TCP `CurrEstab` and state inventory are instantaneous gauges and have no rates. Host counters are never attributed to the target or interface; interface counters are path context, not causation. See [network degradation](network-degradation.md).
+
+The host agent uses `os.statvfs` for each configured absolute path, default `/`. These fields are Linux `statvfs` counters, not a `/proc` text parser. Fixture data in `tests/fixtures/statvfs.json` is explicitly synthetic and includes reserved blocks, zero capacity and malformed counters.
 
 | Sample field | Meaning and unit |
 | --- | --- |

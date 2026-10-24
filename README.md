@@ -1,5 +1,7 @@
 # FleetDoctor
 
+Task09 adds strict schema-v5 direct-IPv4 network telemetry and a durable `network_path_degradation` lifecycle. Operational and evidence boundaries are documented in the [network runbook](docs/network-degradation.md) and [Task09 evidence status](docs/task09-evidence.md).
+
 FleetDoctor monitors a small Linux fleet and produces evidence-supported resource diagnoses. **Tasks 01 and 02 implement filesystem collection, healthy-fleet visibility and durable disk incident lifecycle.** Task02 passed local checks and two AWS functional lifecycles on 2026-10-11; see [Task02 evidence](docs/task02-evidence.md) for the frozen inspection record and verification limits. Task03 adds bounded outage delivery and reporting. Task04 adds durable bounded ingestion checkpoints and restart recovery; [Task04 evidence](docs/task04-evidence.md) separates builder proof from independent and live gates. Task05 adds strict v2 host CPU telemetry and CPU saturation. Task06 adds strict v3 host/workload memory telemetry and a generation-scoped workload-OOM lifecycle; see the [OOM runbook](docs/workload-oom.md) and [Task06 evidence status](docs/task06-evidence.md). Task07 adds inode exhaustion with an inode-specific lifecycle, bounded owned helper, and native ext4 proof; see the [inode runbook](docs/inode-exhaustion.md) and [Task07 evidence status](docs/task07-evidence.md). Task08 adds strict v4 process FD pressure, durable exact-identity watches, and a pidfd-only bounded helper; see the [FD runbook](docs/fd-pressure.md) and [Task08 evidence status](docs/task08-evidence.md). The [PRD](<FleetDoctor PRD.md>) owns the full project's requirements.
 
 ```mermaid
@@ -29,6 +31,7 @@ uv run python scripts/integration.py --output <external-path>/integration.json
 uv run python scripts/disk_helper_integration.py --output <external-path>/disk-helper.json
 uv run python scripts/inode_helper_integration.py --output <external-path>/inode-native.json
 uv run python scripts/fd_helper_integration.py --output <external-path>/fd-native.json
+uv run python scripts/network_helper_integration.py --output <external-path>/network-native.json
 # Native Linux/WSL only; deliberately limited and not a saturation claim:
 uv run python scripts/cpu_smoke.py --workers 2 --seconds 5 --output <external-path>/cpu-smoke.json
 # Root Linux with systemd+cgroup v2 and Docker; real bounded kernel OOM:
@@ -59,6 +62,7 @@ uv run python scripts/integration.py --output <external-path>/integration.json
 uv run python scripts/disk_helper_integration.py --output <external-path>/disk-helper.json
 uv run python scripts/inode_helper_integration.py --output <external-path>/inode-native.json
 uv run python scripts/fd_helper_integration.py --output <external-path>/fd-native.json
+uv run python scripts/network_helper_integration.py --output <external-path>/network-native.json
 sudo $(command -v uv) run python scripts/oom_helper_integration.py --output <external-path>/oom-helper.json
 sudo $(command -v uv) run python scripts/oom_smoke.py --output <external-path>/oom-smoke.json
 ```

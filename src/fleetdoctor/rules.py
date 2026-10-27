@@ -816,6 +816,9 @@ class NetworkEvaluator:
         self, sample: Sample, previous: Sample | None, now: datetime, config: NetworkConfig
     ) -> list[Incident]:
         changes: list[Incident] = []
+        # Candidate overflow describes only the current accepted evaluation. Capacity
+        # itself is derived from durable active rows by the API/metrics view.
+        self.admission_overflow_nodes.discard(sample.node_id)
         probe = sample.network.probe if sample.network is not None else None
         target = probe.target if probe is not None else None
         resource = f"ipv4:{target}" if target is not None else None
@@ -900,7 +903,6 @@ class NetworkEvaluator:
             self.admission_overflow_nodes.add(sample.node_id)
             window.opening = 0
             return changes
-        self.admission_overflow_nodes.discard(sample.node_id)
         opened = Incident(
             id=uuid4(),
             node_id=sample.node_id,

@@ -42,7 +42,7 @@ from fleetdoctor.incidents import (
     OomConfig,
 )
 from fleetdoctor.memory import validate_cgroup_paths
-from fleetdoctor.rules import CompositeEvaluator
+from fleetdoctor.rules import MAX_ACTIVE_NETWORK_RESOURCES, CompositeEvaluator
 from fleetdoctor.schema import FIELDS, Sample, WorkloadMemoryObservation
 from fleetdoctor.store import IncidentStore, PostgresStore, StoreError, StoreSnapshot
 
@@ -253,6 +253,11 @@ class State:
                 if active is not None
                 else None
             )
+            network_active_count = (
+                sum(i.node_id == node and i.rule == "network_path_degradation" for i in active)
+                if active is not None
+                else None
+            )
             cpu_coverage = {
                 "host_rates": "available"
                 if fresh and cpu is not None and cpu.busy_percent is not None
@@ -388,10 +393,12 @@ class State:
                     if fresh and network is not None
                     else "unavailable",
                     "admission_capacity": (
-                        "overflow"
-                        if node in self.evaluator.network.admission_overflow_nodes
+                        "unavailable"
+                        if network_active_count is None
+                        or network_active_count >= MAX_ACTIVE_NETWORK_RESOURCES
                         else "available"
                     ),
+                    "candidate_overflow": (node in self.evaluator.network.admission_overflow_nodes),
                     "host_counter_scope": "host_not_target_or_interface_attributed",
                     "interface_counter_scope": "interface_context_not_path_causation",
                     "errors": network.errors
@@ -938,6 +945,12 @@ def create_app(
             ["node"],
             registry=registry,
         )
+        network_overflow_g = Gauge(
+            "fleetdoctor_network_admission_candidate_overflow",
+            "A qualifying network candidate was rejected by the active incident cap",
+            ["node"],
+            registry=registry,
+        )
         network_probe_gauges = {
             "loss_ratio": Gauge(
                 "fleetdoctor_network_probe_loss_ratio",
@@ -1108,6 +1121,7 @@ def create_app(
             network_admission_g.labels(node).set(
                 int(network_coverage["admission_capacity"] == "available")
             )
+            network_overflow_g.labels(node).set(int(network_coverage["candidate_overflow"]))
             network = view["network"]
             if network is not None:
                 probe = network["probe"]

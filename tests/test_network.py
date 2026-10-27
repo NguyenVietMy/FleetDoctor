@@ -660,3 +660,98 @@ def test_network_v4_v5_order_atomicity_frozen_restart_and_recurrence() -> None:
         update={"observed_at": clock[0] - timedelta(seconds=20)}
     )
     assert post(out_of_order).json()["status"] == "ineligible"
+
+
+def test_network_admission_capacity_overflow_reload_and_recovery_are_truthful() -> None:
+    now = [datetime(2026, 10, 24, 12, tzinfo=UTC)]
+    store = FixtureStore()
+    tokens = {"node-a": SecretStr("a" * 32), "node-b": SecretStr("b" * 32)}
+    rule = NetworkConfig(consecutive_samples=1)
+
+    def new_client() -> TestClient:
+        return TestClient(
+            create_app(tokens, store=store, clock=lambda: now[0], network_config=rule)
+        )
+
+    client = new_client()
+
+    def post_network(sequence: int, target: str, *, lost: int) -> None:
+        now[0] += timedelta(seconds=1)
+        response = client.post(
+            "/ingest",
+            content=sample(
+                sequence, now[0], observation(target=target, lost=lost)
+            ).model_dump_json(),
+            headers={"Authorization": "Bearer " + "a" * 32},
+        )
+        assert response.status_code == 200 and response.json()["status"] == "accepted"
+
+    def post_targetless(sequence: int) -> None:
+        now[0] += timedelta(seconds=1)
+        value = make_sample(
+            "node-a",
+            BOOT,
+            SESSION,
+            sequence,
+            [Filesystem(mountpoint="/", errors=["fixture"])],
+            now[0],
+            cpu=CpuObservation(errors=["fixture"]),
+            memory=MemoryObservation(host=HostMemoryObservation(errors=["fixture"])),
+            fd=FdObservation(errors=["fixture"]),
+        )
+        response = client.post(
+            "/ingest",
+            content=value.model_dump_json(),
+            headers={"Authorization": "Bearer " + "a" * 32},
+        )
+        assert response.status_code == 200 and response.json()["status"] == "accepted"
+
+    def assert_admission(capacity: str, overflow: bool) -> None:
+        coverage = client.get("/nodes/node-a/metrics").json()["network_coverage"]
+        assert coverage["admission_capacity"] == capacity
+        assert coverage["candidate_overflow"] is overflow
+        metrics = client.get("/metrics").text
+        expected_capacity = 1.0 if capacity == "available" else 0.0
+        assert (
+            f'fleetdoctor_network_admission_capacity_available{{node="node-a"}} {expected_capacity}'
+        ) in metrics
+        assert (
+            f'fleetdoctor_network_admission_candidate_overflow{{node="node-a"}} '
+            f"{1.0 if overflow else 0.0}"
+        ) in metrics
+        node_b = client.get("/nodes/node-b/metrics").json()["network_coverage"]
+        assert node_b["admission_capacity"] == "available"
+        assert not node_b["candidate_overflow"]
+
+    targets = [f"10.0.0.{index}" for index in range(1, 20)]
+    for sequence, target in enumerate(targets[:15]):
+        post_network(sequence, target, lost=1)
+    assert len(store.active()) == 15
+    assert_admission("available", False)
+
+    post_network(15, targets[15], lost=1)
+    assert len(store.active()) == 16
+    assert_admission("unavailable", False)
+
+    client = new_client()
+    assert len(store.active()) == 16
+    assert_admission("unavailable", False)
+
+    post_network(16, targets[16], lost=1)
+    assert len(store.active()) == 16
+    assert_admission("unavailable", True)
+
+    post_network(17, targets[16], lost=0)
+    assert len(store.active()) == 16
+    assert_admission("unavailable", False)
+
+    post_network(18, targets[17], lost=1)
+    assert_admission("unavailable", True)
+    post_targetless(19)
+    assert_admission("unavailable", False)
+
+    post_network(20, targets[18], lost=1)
+    assert_admission("unavailable", True)
+    post_network(21, targets[0], lost=0)
+    assert len(store.active()) == 15
+    assert_admission("available", False)

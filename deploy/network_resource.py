@@ -114,6 +114,19 @@ def run_path(token: str) -> Path:
     return RUNS / f"{token}.json"
 
 
+def lease_draft_path(token: str) -> Path:
+    run_path(token)
+    return RUNS / f".{token}.lease"
+
+
+def _fsync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def save(path: Path, value: dict[str, Any]) -> None:
     temporary = path.with_suffix(".tmp")
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
@@ -125,6 +138,73 @@ def save(path: Path, value: dict[str, Any]) -> None:
     finally:
         os.close(fd)
     os.replace(temporary, path)
+    _fsync_directory(path.parent)
+
+
+def _trusted_json(path: Path, *, links: set[int]) -> tuple[dict[str, Any], os.stat_result]:
+    if path.is_symlink():
+        raise ValueError("network helper metadata symlink refused")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        value = os.fstat(fd)
+        if (
+            value.st_uid != 0
+            or not stat.S_ISREG(value.st_mode)
+            or value.st_nlink not in links
+            or value.st_mode & 0o077
+        ):
+            raise ValueError("network helper metadata is not trusted")
+        stream = os.fdopen(fd, encoding="utf-8")
+        fd = -1
+        with stream:
+            document = json.load(stream)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if not isinstance(document, dict):
+        raise ValueError("network helper metadata is not an object")
+    return document, value
+
+
+def prepare_lease(token: str) -> Path:
+    draft = lease_draft_path(token)
+    if draft.exists() or draft.is_symlink():
+        raise ValueError("network lease draft already exists")
+    save(draft, {"token": token})
+    value, _ = _trusted_json(draft, links={1})
+    if value != {"token": token}:
+        raise ValueError("network lease draft token changed")
+    return draft
+
+
+def publish_lease(token: str) -> None:
+    draft = lease_draft_path(token)
+    value, _ = _trusted_json(draft, links={1})
+    if value != {"token": token}:
+        raise ValueError("network lease draft token changed")
+    os.link(draft, LEASE, src_dir_fd=None, dst_dir_fd=None, follow_symlinks=False)
+    _fsync_directory(BASE)
+    # Either actor may observe the complete hard link first. Validation proves
+    # exact token/inode authority and idempotently collapses the private link.
+    validate_lease(token)
+
+
+def remove_lease_draft(token: str) -> None:
+    draft = lease_draft_path(token)
+    if not draft.exists() and not draft.is_symlink():
+        return
+    value, draft_stat = _trusted_json(draft, links={1, 2})
+    if value != {"token": token}:
+        raise ValueError("network lease draft token changed")
+    if draft_stat.st_nlink == 2:
+        lease_value, lease_stat = _trusted_json(LEASE, links={2})
+        if lease_value != {"token": token} or (lease_stat.st_dev, lease_stat.st_ino) != (
+            draft_stat.st_dev,
+            draft_stat.st_ino,
+        ):
+            raise ValueError("network lease draft hard link is not authorized")
+    draft.unlink()
+    _fsync_directory(RUNS)
 
 
 def command(argv: list[str], *, timeout: float = 2) -> dict[str, Any]:
@@ -440,24 +520,51 @@ def validate_lease(token: str, *, allow_absent_after_restore: bool = False) -> b
         if allow_absent_after_restore:
             return False
         raise ValueError("network lease is missing")
-    fd = os.open(LEASE, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
-        value = os.fstat(fd)
-        if (
-            value.st_uid != 0
-            or not stat.S_ISREG(value.st_mode)
-            or value.st_nlink != 1
-            or value.st_mode & 0o077
-        ):
-            raise ValueError("network lease is not trusted")
-        with os.fdopen(fd, encoding="utf-8") as stream:
-            lease = json.load(stream)
-            fd = -1
-    finally:
-        if fd >= 0:
-            os.close(fd)
+    lease, lease_stat = _trusted_json(LEASE, links={1, 2})
     if lease != {"token": token}:
         raise ValueError("network lease token does not authorize this run")
+    if lease_stat.st_nlink == 2:
+        draft = lease_draft_path(token)
+
+        def completed_publication_is_same() -> bool:
+            current, current_stat = _trusted_json(LEASE, links={1})
+            return current == {"token": token} and (current_stat.st_dev, current_stat.st_ino) == (
+                lease_stat.st_dev,
+                lease_stat.st_ino,
+            )
+
+        try:
+            draft_value, draft_stat = _trusted_json(draft, links={2})
+        except (FileNotFoundError, ValueError) as companion_error:
+            try:
+                if completed_publication_is_same():
+                    return True
+            except BaseException as reproof_error:
+                companion_error.add_note(
+                    "completed publication reproof also failed: "
+                    f"{type(reproof_error).__name__}: {reproof_error}"
+                )
+                raise companion_error from reproof_error
+            raise ValueError(
+                "network lease authority changed during normalization"
+            ) from companion_error
+        if draft_value != lease or (draft_stat.st_dev, draft_stat.st_ino) != (
+            lease_stat.st_dev,
+            lease_stat.st_ino,
+        ):
+            raise ValueError("network lease publication hard link is not authorized")
+        try:
+            draft.unlink()
+            _fsync_directory(RUNS)
+        except FileNotFoundError:
+            # A mutually authorized parent/watchdog may have normalized the
+            # same inode after our exact checks. Re-prove the published link;
+            # never treat an arbitrary missing draft as success.
+            if not completed_publication_is_same():
+                raise ValueError("network lease publication changed during normalization") from None
+            return True
+        if not completed_publication_is_same():
+            raise ValueError("network lease publication did not normalize")
     return True
 
 
@@ -479,10 +586,48 @@ def owned_watchdog(record: dict[str, Any]) -> bool:
         return False
 
 
-def launch_watchdog(token: str, duration: int) -> subprocess.Popen[bytes]:
-    read_fd, write_fd = os.pipe()
-    log = (RUNS / f"{token}.log").open("ab")
+def _read_handshake(
+    process: subprocess.Popen[bytes], read_fd: int, expected: bytes, *, timeout: float = 2
+) -> None:
+    deadline = time.monotonic() + timeout
+    received = b""
+    while len(received) < len(expected):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or process.poll() is not None:
+            raise TimeoutError(f"network watchdog {expected.decode()} deadline exceeded")
+        ready, _, _ = select.select([read_fd], [], [], remaining)
+        if not ready:
+            raise TimeoutError(f"network watchdog {expected.decode()} deadline exceeded")
+        chunk = os.read(read_fd, len(expected) - len(received))
+        if not chunk:
+            raise RuntimeError(f"network watchdog closed before {expected.decode()}")
+        received += chunk
+    if received != expected:
+        raise RuntimeError(f"network watchdog sent invalid {expected.decode()} handshake")
+
+
+def stop_watchdog(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        process.kill()
+    process.wait(timeout=2)
+
+
+def _close_fd(fd: int | None) -> None:
+    if fd is None:
+        return
     try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def launch_watchdog(token: str, duration: int) -> tuple[subprocess.Popen[bytes], int]:
+    read_fd, write_fd = os.pipe()
+    log: Any = None
+    process: subprocess.Popen[bytes] | None = None
+    handoff = False
+    try:
+        log = (RUNS / f"{token}.log").open("ab")
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -502,18 +647,58 @@ def launch_watchdog(token: str, duration: int) -> subprocess.Popen[bytes]:
             close_fds=True,
             pass_fds=(write_fd,),
         )
-    finally:
         log.close()
-        os.close(write_fd)
+        log = None
+        _close_fd(write_fd)
+        write_fd = -1
+        _read_handshake(process, read_fd, b"ready")
+        handoff = True
+        return process, read_fd
+    except BaseException as exc:
+        if process is not None:
+            try:
+                stop_watchdog(process)
+            except BaseException as reap_error:
+                exc.add_note(
+                    f"owned watchdog reap also failed: {type(reap_error).__name__}: {reap_error}"
+                )
+        raise
+    finally:
+        if log is not None:
+            log.close()
+        _close_fd(write_fd)
+        if not handoff:
+            _close_fd(read_fd)
+
+
+def wait_watchdog_armed(process: subprocess.Popen[bytes], read_fd: int) -> None:
     try:
-        ready, _, _ = select.select([read_fd], [], [], 2)
-        if not ready or os.read(read_fd, 5) != b"ready":
-            process.kill()
-            process.wait(timeout=2)
-            raise TimeoutError("network watchdog readiness deadline exceeded")
+        _read_handshake(process, read_fd, b"armed")
     finally:
         os.close(read_fd)
-    return process
+
+
+def reap_watchdog_after_cleanup(process: subprocess.Popen[bytes]) -> None:
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        stop_watchdog(process)
+
+
+def retain_setup_failure(record: dict[str, Any], exc: BaseException, phase: str) -> None:
+    record.update(
+        setup_state="setup_failed",
+        setup_failure_phase=phase,
+        setup_failure=f"{type(exc).__name__}: {exc}",
+        setup_failure_utc=datetime.now(UTC).isoformat(),
+    )
+    try:
+        save(run_path(record["token"]), record)
+    except BaseException as persistence_error:
+        exc.add_note(
+            "setup failure persistence also failed: "
+            f"{type(persistence_error).__name__}: {persistence_error}"
+        )
 
 
 def cleanup_locked(token: str, *, reason: str) -> dict[str, Any]:
@@ -686,12 +871,6 @@ def start(token: str, target: str, profile: str, duration: int) -> dict[str, Any
         prestate = tc_state(route["interface"], tc)
         if not supported_baseline(prestate):
             raise ValueError("foreign tc state refused; prepare a dedicated noqueue lab interface")
-        lease_fd = os.open(LEASE, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
-        try:
-            os.write(lease_fd, json.dumps({"token": token}).encode())
-            os.fsync(lease_fd)
-        finally:
-            os.close(lease_fd)
         record: dict[str, Any] = {
             "token": token,
             "target": target,
@@ -709,18 +888,58 @@ def start(token: str, target: str, profile: str, duration: int) -> dict[str, Any
             "deadline_monotonic": time.monotonic() + duration,
             "parent_pid": os.getpid(),
             "parent_start": process_start(os.getpid()),
-            "setup_state": "starting",
+            "setup_state": "preparing",
             "completed_steps": 0,
         }
-        save(path, record)
-        watchdog = launch_watchdog(token, duration)
-        record.update(watchdog_pid=watchdog.pid, watchdog_start=process_start(watchdog.pid))
-        save(path, record)
-        if not owned_watchdog(record):
-            raise RuntimeError("independent network watchdog did not establish authority")
-        commands = setup_commands(tc, route["interface"], target, profile)
+        watchdog: subprocess.Popen[bytes] | None = None
+        handshake_fd: int | None = None
+        published = False
+        phase = "initial_record"
         try:
+            save(path, record)
+            phase = "private_lease_preparation"
+            prepare_lease(token)
+            phase = "watchdog_readiness"
+            watchdog, handshake_fd = launch_watchdog(token, duration)
+            phase = "watchdog_identity"
+            record.update(
+                watchdog_pid=watchdog.pid,
+                watchdog_start=process_start(watchdog.pid),
+                setup_state="watchdog_ready",
+            )
+            phase = "watchdog_identity_persistence"
+            save(path, record)
+            phase = "watchdog_authority"
+            if not owned_watchdog(record):
+                raise RuntimeError("independent network watchdog did not establish authority")
+            phase = "lease_publication"
+            publish_lease(token)
+            published = True
+            phase = "watchdog_armed_handshake"
+            wait_watchdog_armed(watchdog, handshake_fd)
+            handshake_fd = None
+            record = load_record(token)
+            if (
+                record.get("setup_state") != "watchdog_ready"
+                or not owned_watchdog(record)
+                or not validate_lease(token)
+            ):
+                raise RuntimeError("independent network watchdog did not arm with lease authority")
+            record.update(
+                watchdog_armed=True,
+                watchdog_armed_utc=datetime.now(UTC).isoformat(),
+                setup_state="armed",
+            )
+            phase = "armed_attestation_persistence"
+            save(path, record)
+            if not owned_watchdog(record) or not validate_lease(token):
+                raise RuntimeError("independent network watchdog lost armed authority")
+            record["setup_state"] = "starting"
+            phase = "armed_state_persistence"
+            save(path, record)
+            commands = setup_commands(tc, route["interface"], target, profile)
             for index, argv in enumerate(commands):
+                phase = f"tc_step_{index}"
                 record["pending_step"] = index
                 save(path, record)
                 result = command(argv)
@@ -744,12 +963,57 @@ def start(token: str, target: str, profile: str, duration: int) -> dict[str, Any
             save(path, record)
             return record
         except BaseException as exc:
-            record["setup_failure"] = f"{type(exc).__name__}: {exc}"
-            save(path, record)
-            try:
-                cleanup_locked(token, reason="partial_setup_rollback")
-            except BaseException as cleanup_error:
-                exc.add_note(f"retained cleanup failure: {type(cleanup_error).__name__}")
+            _close_fd(handshake_fd)
+            lease_authorized = False
+            if published or LEASE.exists() or LEASE.is_symlink():
+                try:
+                    lease_authorized = validate_lease(token)
+                except BaseException as authority_error:
+                    exc.add_note(
+                        "lease authority verification also failed: "
+                        f"{type(authority_error).__name__}: {authority_error}"
+                    )
+            if not lease_authorized and watchdog is not None:
+                try:
+                    stop_watchdog(watchdog)
+                except BaseException as reap_error:
+                    exc.add_note(
+                        "owned watchdog reap also failed: "
+                        f"{type(reap_error).__name__}: {reap_error}"
+                    )
+            retain_setup_failure(record, exc, phase)
+            if lease_authorized:
+                cleanup_complete = False
+                try:
+                    result = cleanup_locked(
+                        token,
+                        reason=(
+                            "partial_setup_rollback"
+                            if phase.startswith("tc_step_")
+                            else "establishment_rollback"
+                        ),
+                    )
+                    cleanup_complete = result.get("cleanup_complete") is True
+                except BaseException as cleanup_error:
+                    exc.add_note(
+                        f"retained cleanup failure: {type(cleanup_error).__name__}: {cleanup_error}"
+                    )
+                if cleanup_complete and watchdog is not None:
+                    try:
+                        reap_watchdog_after_cleanup(watchdog)
+                    except BaseException as reap_error:
+                        exc.add_note(
+                            "owned watchdog reap after cleanup also failed: "
+                            f"{type(reap_error).__name__}: {reap_error}"
+                        )
+            else:
+                try:
+                    remove_lease_draft(token)
+                except BaseException as draft_error:
+                    exc.add_note(
+                        "private lease draft cleanup also failed: "
+                        f"{type(draft_error).__name__}: {draft_error}"
+                    )
             raise
 
 
@@ -771,7 +1035,6 @@ def status(token: str) -> dict[str, Any]:
 
 def watchdog(token: str, duration: int, ready_fd: int) -> None:
     record = load_record(token)
-    validate_lease(token)
     raw_deadline = record.get("deadline_monotonic")
     if not isinstance(raw_deadline, (int, float)) or isinstance(raw_deadline, bool):
         raise ValueError("network watchdog deadline is invalid")
@@ -779,12 +1042,67 @@ def watchdog(token: str, duration: int, ready_fd: int) -> None:
     if deadline <= time.monotonic() or deadline > time.monotonic() + 180:
         raise ValueError("network watchdog deadline is invalid")
     os.write(ready_fd, b"ready")
-    os.close(ready_fd)
+    while time.monotonic() < deadline:
+        latest = load_record(token)
+        if latest.get("cleanup_complete"):
+            os.close(ready_fd)
+            return
+        try:
+            parent_alive = process_start(latest["parent_pid"]) == latest["parent_start"]
+        except (KeyError, OSError, TypeError, ValueError):
+            parent_alive = False
+        if LEASE.exists() or LEASE.is_symlink():
+            validate_lease(token)
+            if (
+                latest.get("watchdog_pid") != os.getpid()
+                or latest.get("watchdog_start") != process_start(os.getpid())
+                or not owned_watchdog(latest)
+            ):
+                raise RuntimeError("network watchdog lease was published before mutual authority")
+            try:
+                os.write(ready_fd, b"armed")
+            except BrokenPipeError:
+                pass
+            finally:
+                os.close(ready_fd)
+            break
+        if not parent_alive:
+            latest.update(
+                setup_state="setup_failed",
+                setup_failure_phase="before_lease_publication",
+                setup_failure="network helper parent exited before lease publication",
+                setup_failure_utc=datetime.now(UTC).isoformat(),
+            )
+            save(run_path(token), latest)
+            remove_lease_draft(token)
+            os.close(ready_fd)
+            return
+        time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+    else:
+        os.close(ready_fd)
+        if LEASE.exists() or LEASE.is_symlink():
+            cleanup(token, reason="watchdog_arm_deadline")
+        else:
+            try:
+                parent_alive = process_start(record["parent_pid"]) == record["parent_start"]
+            except (KeyError, OSError, TypeError, ValueError):
+                parent_alive = False
+            if parent_alive:
+                return
+            record.update(
+                setup_state="setup_failed",
+                setup_failure_phase="watchdog_arm_deadline",
+                setup_failure="network watchdog was not armed before its deadline",
+                setup_failure_utc=datetime.now(UTC).isoformat(),
+            )
+            save(run_path(token), record)
+            remove_lease_draft(token)
+        return
     while time.monotonic() < deadline:
         latest = load_record(token)
         if latest.get("cleanup_complete"):
             return
-        if latest.get("setup_state") == "starting":
+        if latest.get("setup_state") != "active":
             try:
                 parent_alive = process_start(latest["parent_pid"]) == latest["parent_start"]
             except (KeyError, OSError, TypeError, ValueError):

@@ -1,8 +1,12 @@
+import json
 import os
+import subprocess
+import sys
+import threading
+import time
 from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -246,6 +250,434 @@ def test_cleanup_retry_finishes_after_lease_was_already_unlinked(
     assert all(item.get("cleanup_phase") != "restored" for item in saved)
 
 
+class FakeWatchdog:
+    def __init__(self) -> None:
+        self.pid = 123
+        self.killed = False
+        self.reaped = False
+
+    def poll(self) -> int | None:
+        return 0 if self.reaped else None
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.reaped = True
+        return 0
+
+
+def configure_start_fixture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[str, FakeWatchdog]:
+    token = "9" * 32
+    route = {
+        "target": "192.0.2.10",
+        "interface": "eth0",
+        "ifindex": 2,
+        "source": "192.0.2.2",
+        "namespace": {"device": 1, "inode": 2},
+    }
+    baseline = {
+        "qdisc": [{"kind": "noqueue", "root": True}],
+        "class": [],
+        "filter_root": [],
+        "filter_ingress": [],
+    }
+    watchdog = FakeWatchdog()
+    monkeypatch.setattr(helper, "LEASE", tmp_path / "lease.json")
+    monkeypatch.setattr(helper, "RUNS", tmp_path)
+    monkeypatch.setattr(helper, "run_path", lambda value: tmp_path / f"{value}.json")
+    monkeypatch.setattr(helper, "locked", lambda: nullcontext())
+    monkeypatch.setattr(helper, "_tool", lambda name: f"/sbin/{name}")
+    monkeypatch.setattr(helper, "route_identity", lambda target, ip: route)
+    monkeypatch.setattr(helper, "namespace_identity", lambda: route["namespace"])
+    monkeypatch.setattr(helper, "tc_state", lambda interface, tc: baseline)
+    monkeypatch.setattr(helper, "process_start", lambda pid: "456")
+    monkeypatch.setattr(helper, "owned_watchdog", lambda record: True)
+    monkeypatch.setattr(
+        helper,
+        "prepare_lease",
+        lambda value: tmp_path / f".{value}.lease",
+        raising=False,
+    )
+    monkeypatch.setattr(helper, "remove_lease_draft", lambda value: None, raising=False)
+    monkeypatch.setattr(
+        helper,
+        "command",
+        lambda argv: pytest.fail("tc must not run before mutual watchdog/lease authority"),
+    )
+    return token, watchdog
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "initial_record",
+        "spawn",
+        "identity",
+        "identity_save",
+        "authority",
+        "lease_publication",
+    ],
+)
+def test_establishment_failure_has_no_prepublication_lease_and_reaps_owned_child(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str
+) -> None:
+    token, watchdog = configure_start_fixture(monkeypatch, tmp_path)
+    if failure == "initial_record":
+        monkeypatch.setattr(
+            helper,
+            "save",
+            lambda path, value: (_ for _ in ()).throw(OSError("initial record failed")),
+        )
+        monkeypatch.setattr(
+            helper,
+            "launch_watchdog",
+            lambda value, duration: pytest.fail("watchdog must follow durable preparation"),
+        )
+    elif failure == "spawn":
+        monkeypatch.setattr(
+            helper,
+            "launch_watchdog",
+            lambda value, duration: (_ for _ in ()).throw(OSError("spawn failed")),
+        )
+    else:
+        monkeypatch.setattr(helper, "launch_watchdog", lambda value, duration: (watchdog, 77))
+    if failure == "identity":
+        monkeypatch.setattr(
+            helper,
+            "process_start",
+            lambda pid: (
+                (_ for _ in ()).throw(OSError("identity failed")) if pid == watchdog.pid else "456"
+            ),
+        )
+    if failure == "identity_save":
+        original_save = helper.save
+
+        def fail_identity_save(path: Path, value: dict[str, Any]) -> None:
+            if value.get("watchdog_pid") == watchdog.pid:
+                raise OSError("identity save failed")
+            original_save(path, value)
+
+        monkeypatch.setattr(helper, "save", fail_identity_save)
+    if failure == "authority":
+        monkeypatch.setattr(helper, "owned_watchdog", lambda record: False)
+    if failure == "lease_publication":
+        monkeypatch.setattr(
+            helper,
+            "publish_lease",
+            lambda value: (_ for _ in ()).throw(OSError("lease publication failed")),
+            raising=False,
+        )
+    else:
+        monkeypatch.setattr(
+            helper,
+            "publish_lease",
+            lambda value: pytest.fail("lease publication must not precede all authority checks"),
+            raising=False,
+        )
+    with pytest.raises((OSError, RuntimeError)):
+        helper.start(token, "192.0.2.10", "latency", 30)
+    assert not helper.LEASE.exists()
+    if failure not in {"initial_record", "spawn"}:
+        assert watchdog.killed
+        assert watchdog.reaped
+
+
+def test_readiness_timeout_reaps_the_actual_spawned_child(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real_popen = subprocess.Popen
+    spawned: list[subprocess.Popen[bytes]] = []
+
+    def spawn_sleep(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        child = real_popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.DEVNULL,
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
+            start_new_session=True,
+        )
+        spawned.append(child)
+        return child
+
+    monkeypatch.setattr(helper, "RUNS", tmp_path)
+    monkeypatch.setattr(helper.subprocess, "Popen", spawn_sleep)
+    monkeypatch.setattr(helper.select, "select", lambda *args: ([], [], []))
+    with pytest.raises(TimeoutError, match="ready deadline"):
+        helper.launch_watchdog("8" * 32, 30)
+    assert len(spawned) == 1
+    assert spawned[0].poll() is not None
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned lease authority")
+def test_complete_hard_link_publication_is_normalized_after_parent_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    token = "7" * 32
+    base = tmp_path / "network"
+    runs = base / "runs"
+    runs.mkdir(parents=True)
+    os.chmod(base, 0o700)
+    os.chmod(runs, 0o700)
+    monkeypatch.setattr(helper, "BASE", base)
+    monkeypatch.setattr(helper, "RUNS", runs)
+    monkeypatch.setattr(helper, "LEASE", base / "lease.json")
+    draft = helper.prepare_lease(token)
+    assert not helper.LEASE.exists()
+    os.link(draft, helper.LEASE, follow_symlinks=False)
+    assert os.stat(helper.LEASE).st_nlink == 2
+    assert helper.validate_lease(token)
+    assert not draft.exists()
+    assert os.stat(helper.LEASE).st_nlink == 1
+    assert helper.LEASE.read_text(encoding="utf-8") == '{"token":"' + token + '"}'
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned lease authority")
+def test_child_normalization_between_link_and_parent_unlink_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    token = "6" * 32
+    base = tmp_path / "network"
+    runs = base / "runs"
+    runs.mkdir(parents=True)
+    os.chmod(base, 0o700)
+    os.chmod(runs, 0o700)
+    monkeypatch.setattr(helper, "BASE", base)
+    monkeypatch.setattr(helper, "RUNS", runs)
+    monkeypatch.setattr(helper, "LEASE", base / "lease.json")
+    helper.prepare_lease(token)
+    original_fsync = helper._fsync_directory
+    normalized = False
+
+    def normalize_after_link(path: Path) -> None:
+        nonlocal normalized
+        original_fsync(path)
+        if path == base and not normalized:
+            normalized = True
+            assert helper.validate_lease(token)
+
+    monkeypatch.setattr(helper, "_fsync_directory", normalize_after_link)
+    helper.publish_lease(token)
+    assert normalized
+    assert helper.validate_lease(token)
+    assert os.stat(helper.LEASE).st_nlink == 1
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned lease authority")
+@pytest.mark.parametrize("schedule", ["before_companion_open", "before_companion_fstat"])
+def test_completed_publication_is_reproved_across_companion_normalization_races(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, schedule: str
+) -> None:
+    token = "2" * 32
+    base = tmp_path / "network"
+    runs = base / "runs"
+    runs.mkdir(parents=True)
+    os.chmod(base, 0o700)
+    os.chmod(runs, 0o700)
+    monkeypatch.setattr(helper, "BASE", base)
+    monkeypatch.setattr(helper, "RUNS", runs)
+    monkeypatch.setattr(helper, "LEASE", base / "lease.json")
+    draft = helper.prepare_lease(token)
+    os.link(draft, helper.LEASE, follow_symlinks=False)
+    published = os.stat(helper.LEASE)
+    if schedule == "before_companion_open":
+        original_trusted_json = helper._trusted_json
+        first_lease_read = True
+
+        def trusted_json(path: Path, *, links: set[int]) -> tuple[dict[str, Any], os.stat_result]:
+            nonlocal first_lease_read
+            value: tuple[dict[str, Any], os.stat_result] = original_trusted_json(path, links=links)
+            if path == helper.LEASE and first_lease_read:
+                first_lease_read = False
+                draft.unlink()
+            return value
+
+        monkeypatch.setattr(helper, "_trusted_json", trusted_json)
+    else:
+        original_fstat = helper.os.fstat
+        fstat_calls = 0
+
+        def fstat(fd: int) -> os.stat_result:
+            nonlocal fstat_calls
+            fstat_calls += 1
+            if fstat_calls == 2:
+                draft.unlink()
+            value: os.stat_result = original_fstat(fd)
+            return value
+
+        monkeypatch.setattr(helper.os, "fstat", fstat)
+    assert helper.validate_lease(token)
+    final = os.stat(helper.LEASE)
+    assert (final.st_dev, final.st_ino) == (published.st_dev, published.st_ino)
+    assert final.st_nlink == 1
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned lease authority")
+def test_missing_companion_never_authorizes_a_replaced_lease(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    token = "1" * 32
+    foreign = "f" * 32
+    base = tmp_path / "network"
+    runs = base / "runs"
+    runs.mkdir(parents=True)
+    os.chmod(base, 0o700)
+    os.chmod(runs, 0o700)
+    monkeypatch.setattr(helper, "BASE", base)
+    monkeypatch.setattr(helper, "RUNS", runs)
+    monkeypatch.setattr(helper, "LEASE", base / "lease.json")
+    draft = helper.prepare_lease(token)
+    os.link(draft, helper.LEASE, follow_symlinks=False)
+    original_trusted_json = helper._trusted_json
+    first_lease_read = True
+
+    def replace_after_read(path: Path, *, links: set[int]) -> tuple[dict[str, Any], os.stat_result]:
+        nonlocal first_lease_read
+        value: tuple[dict[str, Any], os.stat_result] = original_trusted_json(path, links=links)
+        if path == helper.LEASE and first_lease_read:
+            first_lease_read = False
+            draft.unlink()
+            helper.LEASE.unlink()
+            helper.LEASE.write_text('{"token":"' + foreign + '"}', encoding="utf-8")
+            os.chmod(helper.LEASE, 0o600)
+        return value
+
+    monkeypatch.setattr(helper, "_trusted_json", replace_after_read)
+    with pytest.raises((FileNotFoundError, ValueError)):
+        helper.validate_lease(token)
+    assert json.loads(helper.LEASE.read_text(encoding="utf-8")) == {"token": foreign}
+
+
+@pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="Linux fd inventory")
+@pytest.mark.parametrize("failure", ["log_open", "popen"])
+def test_watchdog_construction_failures_close_every_owned_descriptor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str
+) -> None:
+    before = {path.name for path in Path("/proc/self/fd").iterdir()}
+    if failure == "log_open":
+        monkeypatch.setattr(helper, "RUNS", tmp_path / "missing")
+    else:
+        monkeypatch.setattr(helper, "RUNS", tmp_path)
+        monkeypatch.setattr(
+            helper.subprocess,
+            "Popen",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("Popen construction failed")),
+        )
+    with pytest.raises(OSError):
+        helper.launch_watchdog("5" * 32, 30)
+    after = {path.name for path in Path("/proc/self/fd").iterdir()}
+    assert after == before
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned lease authority")
+def test_malformed_lease_preserves_parse_error_and_is_not_deleted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lease = tmp_path / "lease.json"
+    lease.write_text('{"token":', encoding="utf-8")
+    os.chmod(lease, 0o600)
+    monkeypatch.setattr(helper, "LEASE", lease)
+    with pytest.raises(json.JSONDecodeError):
+        helper.validate_lease("4" * 32)
+    assert lease.read_text(encoding="utf-8") == '{"token":'
+
+
+def test_postpublication_armed_failure_releases_owned_lease_and_reaps_watchdog(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    token, watchdog = configure_start_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(helper, "launch_watchdog", lambda value, duration: (watchdog, 77))
+
+    def publish(value: str) -> None:
+        helper.LEASE.write_text('{"token":"' + value + '"}', encoding="utf-8")
+
+    monkeypatch.setattr(helper, "publish_lease", publish)
+    monkeypatch.setattr(
+        helper,
+        "wait_watchdog_armed",
+        lambda process, fd: (_ for _ in ()).throw(TimeoutError("armed timeout")),
+    )
+    monkeypatch.setattr(helper, "validate_lease", lambda value, **kwargs: True)
+
+    def cleanup_locked(value: str, *, reason: str) -> dict[str, Any]:
+        assert reason == "establishment_rollback"
+        helper.LEASE.unlink()
+        return {"cleanup_complete": True}
+
+    monkeypatch.setattr(helper, "cleanup_locked", cleanup_locked)
+    with pytest.raises(TimeoutError, match="armed timeout"):
+        helper.start(token, "192.0.2.10", "latency", 30)
+    assert not helper.LEASE.exists()
+    assert watchdog.reaped
+
+
+def test_watchdog_armed_ack_never_rewrites_parent_failure_or_cleanup_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    token = "3" * 32
+    lease = tmp_path / "lease.json"
+    lease.write_text('{"token":"' + token + '"}', encoding="utf-8")
+    record = {
+        "token": token,
+        "deadline_monotonic": time.monotonic() + 5,
+        "parent_pid": 234,
+        "parent_start": "parent-start",
+        "watchdog_pid": os.getpid(),
+        "watchdog_start": "watchdog-start",
+        "setup_state": "watchdog_ready",
+        "cleanup_complete": False,
+    }
+    records = [deepcopy(record)]
+    stale_arm_write = threading.Event()
+    release_stale_write = threading.Event()
+
+    def save_record(path: Path, value: dict[str, Any]) -> None:
+        if value.get("setup_state") == "armed":
+            stale_arm_write.set()
+            release_stale_write.wait(timeout=1)
+        records.append(deepcopy(value))
+
+    monkeypatch.setattr(helper, "LEASE", lease)
+    monkeypatch.setattr(helper, "load_record", lambda value: deepcopy(records[-1]))
+    monkeypatch.setattr(helper, "validate_lease", lambda value, **kwargs: True)
+    monkeypatch.setattr(helper, "owned_watchdog", lambda value: True)
+    monkeypatch.setattr(
+        helper,
+        "process_start",
+        lambda pid: "watchdog-start" if pid == os.getpid() else "parent-start",
+    )
+    monkeypatch.setattr(helper, "save", save_record)
+    read_fd, write_fd = os.pipe()
+    worker = threading.Thread(target=helper.watchdog, args=(token, 5, write_fd))
+    worker.start()
+    assert os.read(read_fd, 5) == b"ready"
+    attempted_stale_write = stale_arm_write.wait(timeout=0.2)
+    parent_cleanup = {
+        **record,
+        "setup_state": "setup_failed",
+        "setup_failure": "TimeoutError: armed handshake failed",
+        "cleanup_complete": True,
+        "cleanup_phase": "complete",
+    }
+    if attempted_stale_write:
+        records.append(deepcopy(parent_cleanup))
+        release_stale_write.set()
+    assert os.read(read_fd, 5) == b"armed"
+    if not attempted_stale_write:
+        records.append(deepcopy(parent_cleanup))
+    time.sleep(0.05)
+    resurrected = records[-1].get("setup_state") == "armed"
+    records.append(deepcopy(parent_cleanup))
+    worker.join(timeout=1)
+    os.close(read_fd)
+    assert not worker.is_alive()
+    assert not attempted_stale_write
+    assert not resurrected
+    assert records[-1] == parent_cleanup
+
+
 @pytest.mark.parametrize("failed_step", [0, 1, 2])
 def test_each_setup_command_failure_attempts_owned_rollback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failed_step: int
@@ -271,9 +703,28 @@ def test_each_setup_command_failure_attempts_owned_rollback(
     monkeypatch.setattr(helper, "route_identity", lambda target, ip: route)
     monkeypatch.setattr(helper, "namespace_identity", lambda: route["namespace"])
     monkeypatch.setattr(helper, "tc_state", lambda interface, tc: baseline)
-    monkeypatch.setattr(helper, "launch_watchdog", lambda value, duration: SimpleNamespace(pid=123))
+    watchdog = FakeWatchdog()
+    monkeypatch.setattr(helper, "launch_watchdog", lambda value, duration: (watchdog, 77))
     monkeypatch.setattr(helper, "process_start", lambda pid: "456")
     monkeypatch.setattr(helper, "owned_watchdog", lambda record: True)
+    monkeypatch.setattr(helper, "prepare_lease", lambda value: tmp_path / ".lease")
+    monkeypatch.setattr(
+        helper,
+        "publish_lease",
+        lambda value: (tmp_path / "lease.json").write_text(
+            '{"token":"' + value + '"}', encoding="utf-8"
+        ),
+    )
+    monkeypatch.setattr(helper, "wait_watchdog_armed", lambda process, fd: None)
+    monkeypatch.setattr(helper, "validate_lease", lambda value, **kwargs: True)
+    monkeypatch.setattr(
+        helper,
+        "load_record",
+        lambda value: {
+            **__import__("json").loads((tmp_path / f"{value}.json").read_text()),
+            "setup_state": "watchdog_ready",
+        },
+    )
     monkeypatch.setattr(
         helper,
         "setup_commands",

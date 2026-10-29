@@ -1,4 +1,4 @@
-name: Task 01 through 09 checks
+name: Task 01 through 10 checks
 on: [push, pull_request]
 jobs:
   filesystem-and-services:
@@ -17,13 +17,13 @@ jobs:
       - run: git diff --check
       - name: Run Linux root fixture suite
         run: |
-          tag="fleetdoctor-task09-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
+          tag="fleetdoctor-task10-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
           trap 'docker image rm --force "$tag" >/dev/null 2>&1 || true' EXIT
           docker build --target test --tag "$tag" .
           docker run --rm "$tag"
           docker run --rm --user 10001:10001 "$tag" \
             /app/.venv/bin/python -m pytest -q
-      - run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector'
+      - run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns'
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.13.1
@@ -35,6 +35,7 @@ jobs:
       - run: uv run python scripts/inode_helper_integration.py --output $RUNNER_TEMP/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/fd_helper_integration.py --output $RUNNER_TEMP/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/network_helper_integration.py --output $RUNNER_TEMP/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - run: uv run python scripts/dns_helper_integration.py --output $RUNNER_TEMP/task10-dns-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/cpu_smoke.py --workers 2 --seconds 2 --output $RUNNER_TEMP/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
       - name: Prepare accessible native OOM runtime
         run: |
@@ -78,13 +79,14 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: task09-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: task10-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/task09-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task10-dns-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.tar.gz
             ${{ runner.temp }}/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task06-oom-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json

@@ -18,6 +18,12 @@ from pydantic import SecretStr, ValidationError
 from fleetdoctor.collection import CollectionWorker
 from fleetdoctor.cpu import CpuCollectionWorker
 from fleetdoctor.delivery import MAX_BODY, MAX_TOTAL, DeliveryQueue, Outcome, send, uploader
+from fleetdoctor.dns import (
+    DnsBaselineHistory,
+    DnsCollector,
+    configured_hostname,
+    require_private_numeric_ingest,
+)
 from fleetdoctor.fd import (
     MAX_WATCH_RESPONSE,
     FdCollectionWorker,
@@ -32,8 +38,10 @@ from fleetdoctor.schema import (
     UNITS_V3,
     UNITS_V4,
     UNITS_V5,
+    UNITS_V6,
     CpuObservation,
     Delivery,
+    DnsObservation,
     FdObservation,
     FdProcessObservation,
     Filesystem,
@@ -73,7 +81,10 @@ def make_sample(
     memory: MemoryObservation | None = None,
     fd: FdObservation | None = None,
     network: NetworkObservation | None = None,
+    dns: DnsObservation | None = None,
 ) -> Sample:
+    if dns is not None and (network is None or fd is None or memory is None or cpu is None):
+        raise ValueError("schema v6 DNS samples require CPU, memory, FD, and network telemetry")
     if network is not None and (fd is None or memory is None or cpu is None):
         raise ValueError("schema v5 network samples require CPU, memory, and FD telemetry")
     if fd is not None and (memory is None or cpu is None):
@@ -81,7 +92,9 @@ def make_sample(
     if memory is not None and cpu is None:
         raise ValueError("schema v3 memory samples require CPU telemetry")
     return Sample(
-        schema_version=5
+        schema_version=6
+        if dns is not None
+        else 5
         if network is not None
         else 4
         if fd is not None
@@ -91,7 +104,9 @@ def make_sample(
         agent_session_id=session,
         sequence=sequence,
         observed_at=observed_at or datetime.now(UTC),
-        units=UNITS_V5
+        units=UNITS_V6
+        if dns is not None
+        else UNITS_V5
         if network is not None
         else UNITS_V4
         if fd is not None
@@ -101,6 +116,7 @@ def make_sample(
         memory=memory,
         fd=fd,
         network=network,
+        dns=dns,
     )
 
 
@@ -244,6 +260,7 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
     memory_worker = MemoryCollectionWorker() if os.name == "posix" else None
     fd_worker = FdCollectionWorker() if os.name == "posix" else None
     network_worker = NetworkCollectionWorker() if os.name == "posix" else None
+    dns_collector = DnsCollector() if os.name == "posix" else None
     supervisor = CollectionSupervisor() if os.name == "posix" else None
     if supervisor is not None:
         cpu_worker = memory_worker = fd_worker = network_worker = None
@@ -252,6 +269,14 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
         url,
         allow_loopback=os.getenv("FLEETDOCTOR_ALLOW_LOOPBACK_NETWORK_TARGET") == "1",
     )
+    hostname = configured_hostname(os.getenv("FLEETDOCTOR_DNS_HOSTNAME", ""))
+    if hostname is not None:
+        if target is None:
+            raise ValueError("DNS monitoring requires FLEETDOCTOR_NETWORK_TARGET")
+        require_private_numeric_ingest(
+            url, allow_loopback=os.getenv("FLEETDOCTOR_ALLOW_LOOPBACK_DNS_INGEST") == "1"
+        )
+    dns_history = DnsBaselineHistory()
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -272,6 +297,9 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
             fd_worker=fd_worker,
             network_worker=network_worker,
             network_target=target,
+            dns_collector=dns_collector,
+            dns_hostname=hostname,
+            dns_history=dns_history,
             supervisor=supervisor,
         )
     finally:
@@ -304,6 +332,9 @@ async def collect_loop(
     fd_worker: FdCollectionWorker | None = None,
     network_worker: NetworkCollectionWorker | None = None,
     network_target: str | None = None,
+    dns_collector: DnsCollector | None = None,
+    dns_hostname: str | None = None,
+    dns_history: DnsBaselineHistory | None = None,
     supervisor: CollectionSupervisor | None = None,
 ) -> None:
     """Also used by the service proof with an ordinary synthetic collection worker."""
@@ -350,6 +381,7 @@ async def collect_loop(
                 memory: MemoryObservation | None
                 fd: FdObservation | None
                 network: NetworkObservation | None
+                dns: DnsObservation | None
                 if supervisor is not None:
                     supervisor_collection = asyncio.create_task(
                         asyncio.to_thread(
@@ -365,6 +397,7 @@ async def collect_loop(
                             watch_cache.revision if watch_cache is not None else None,
                             watch_error,
                             network_target,
+                            dns_hostname,
                         )
                     )
                     try:
@@ -373,11 +406,12 @@ async def collect_loop(
                         await _drain_collection_tasks([supervisor_collection])
                         raise
                     filesystems = collected.filesystems
-                    cpu, memory, fd, network = (
+                    cpu, memory, fd, network, dns = (
                         collected.cpu,
                         collected.memory,
                         collected.fd,
                         collected.network,
+                        collected.dns,
                     )
                 else:
                     filesystem_collection = asyncio.create_task(
@@ -400,6 +434,13 @@ async def collect_loop(
                         if network_worker is not None
                         else None
                     )
+                    dns_collection = (
+                        asyncio.create_task(
+                            asyncio.to_thread(dns_collector.collect, dns_hostname, network_target)
+                        )
+                        if dns_collector is not None
+                        else None
+                    )
                     launched: list[asyncio.Task[Any]] = [
                         task
                         for task in (
@@ -407,6 +448,7 @@ async def collect_loop(
                             cpu_collection,
                             memory_collection,
                             network_collection,
+                            dns_collection,
                         )
                         if task is not None
                     ]
@@ -435,9 +477,23 @@ async def collect_loop(
                         network = (
                             await asyncio.shield(network_collection) if network_collection else None
                         )
+                        dns = await asyncio.shield(dns_collection) if dns_collection else None
                     except BaseException:
                         await _drain_collection_tasks(launched)
                         raise
+                if dns is not None and network is not None:
+                    history = dns_history or DnsBaselineHistory()
+                    dns = history.attach(
+                        dns,
+                        node_id=node,
+                        boot_id=boot,
+                        agent_session_id=session,
+                        sequence=sequence,
+                        observed_at=observed_at,
+                        direct_ip_probe=network.probe,
+                    )
+                    if dns_history is None:
+                        dns_history = history
                 sample = make_sample(
                     node,
                     boot,
@@ -449,6 +505,7 @@ async def collect_loop(
                     memory=memory,
                     fd=fd,
                     network=network,
+                    dns=dns,
                 )
                 enqueue_bounded_sample(queue, sample, datetime.now(UTC))
                 if once:
@@ -494,6 +551,11 @@ def main() -> None:
         url,
         allow_loopback=os.getenv("FLEETDOCTOR_ALLOW_LOOPBACK_NETWORK_TARGET") == "1",
     )
+    hostname = configured_hostname(os.getenv("FLEETDOCTOR_DNS_HOSTNAME", ""))
+    if hostname is not None:
+        require_private_numeric_ingest(
+            url, allow_loopback=os.getenv("FLEETDOCTOR_ALLOW_LOOPBACK_DNS_INGEST") == "1"
+        )
     make_sample(
         node,
         uuid4(),

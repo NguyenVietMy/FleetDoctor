@@ -112,6 +112,90 @@ def partial_result_body(conn: Any) -> None:
     _partial_result(conn, "body")
 
 
+class DiagnosticCpuCollector:
+    def collect(self, _configured: tuple[int, ...]) -> CpuObservation:
+        return CpuObservation(errors=["production_peer"])
+
+
+class DiagnosticMemoryCollector:
+    def collect(self, _cgroups: tuple[str, ...]) -> MemoryObservation:
+        return MemoryObservation(host=HostMemoryObservation(errors=["production_peer"]))
+
+
+class DiagnosticNetworkCollector:
+    def collect(self, target: str | None) -> NetworkObservation:
+        return NetworkObservation.unavailable(target, "production_peer")
+
+
+class DiagnosticFdCollector:
+    def collect(self, *args: Any, **kwargs: Any) -> FdObservation:
+        return FdObservation(errors=["production_peer"])
+
+
+class StalledDnsCollector:
+    def collect(self, _hostname: str, _target: str) -> Any:
+        time.sleep(30)
+
+
+class OversizeDnsValue:
+    def model_dump(self, *, mode: str) -> dict[str, str]:
+        assert mode == "json"
+        return {"oversize": "x" * 65537}
+
+
+class OversizeDnsCollector:
+    def collect(self, _hostname: str, _target: str) -> OversizeDnsValue:
+        return OversizeDnsValue()
+
+
+def _production_target(conn: Any, dns_collector: type[Any]) -> None:
+    supervisor_module._collect_filesystems = lambda paths: [
+        Filesystem(mountpoint=path, errors=["production_peer"]) for path in paths
+    ]
+    supervisor_module.__dict__["CpuCollector"] = DiagnosticCpuCollector
+    supervisor_module.__dict__["MemoryCollector"] = DiagnosticMemoryCollector
+    supervisor_module.__dict__["NetworkCollector"] = DiagnosticNetworkCollector
+    supervisor_module.__dict__["FdCollector"] = DiagnosticFdCollector
+    supervisor_module.__dict__["DnsCollector"] = dns_collector
+    supervisor_module._supervisor_worker(conn)
+
+
+def production_dns_stall_worker(conn: Any) -> None:
+    _production_target(conn, StalledDnsCollector)
+
+
+def production_dns_oversize_worker(conn: Any) -> None:
+    _production_target(conn, OversizeDnsCollector)
+
+
+def partial_dns_result_worker(conn: Any) -> None:
+    os.setsid()
+    identity = _proc_identity(os.getpid())
+    assert identity is not None
+    _send_frame(
+        conn,
+        {
+            "ready": True,
+            "pid": os.getpid(),
+            "pgid": os.getpgrp(),
+            "starttime": identity[2],
+        },
+    )
+    request = _receive_frame(conn)
+    for kind, value in payloads().items():
+        _send_frame(
+            conn,
+            {
+                "kind": "result",
+                "token": request["token"],
+                "result_kind": kind,
+                "payload": value,
+            },
+        )
+    os.write(conn.fileno(), struct.pack("!i", 4096) + b"{")
+    time.sleep(30)
+
+
 def run_with(build: Callable[[dict[str, Any]], list[Any]]) -> tuple[Any, bool]:
     supervisor = CollectionSupervisor()
     supervisor.conn = FakeConnection(build)  # type: ignore[assignment]
@@ -422,5 +506,106 @@ def test_partial_result_frame_preserves_valid_fact_and_reaps_owned_group(target:
     assert elapsed < 3.2
     assert result.cpu.errors == ["partial_frame_preserved"]
     assert result.network.probe.errors == ["collection_supervisor_timeout"]
+    assert supervisor.process is None and not supervisor.stuck
+    assert _group_members(pgid) == {}
+
+
+def _assert_production_peers_survive_dns_failure(result: Any) -> None:
+    assert result.filesystems[0].errors == ["production_peer"]
+    assert result.cpu.errors == ["production_peer"]
+    assert result.memory.host.errors == ["production_peer"]
+    assert result.fd.errors == ["production_peer"]
+    assert result.network.probe.errors == ["production_peer"]
+    assert result.dns is not None
+    assert result.dns.query.status == "unavailable"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="real production process-group semantics")
+def test_production_six_future_dns_stall_preserves_peers_and_reaps_group() -> None:
+    supervisor = CollectionSupervisor(target=production_dns_stall_worker)
+    assert supervisor.wait_ready(2.0)
+    pgid = supervisor.pgid
+    assert pgid is not None
+    started = time.monotonic()
+    result = supervisor.collect_all(
+        uuid4(),
+        uuid4(),
+        7,
+        ("/",),
+        (),
+        (),
+        (),
+        "unavailable",
+        None,
+        "watch_unavailable",
+        "10.0.0.10",
+        "baseline.fleetdoctor.test.",
+        budget=1.0,
+    )
+    assert time.monotonic() - started < 1.2
+    _assert_production_peers_survive_dns_failure(result)
+    assert supervisor.process is None and not supervisor.stuck
+    assert _group_members(pgid) == {}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="real production process-group semantics")
+def test_production_dns_oversize_isolated_from_five_peer_results() -> None:
+    supervisor = CollectionSupervisor(target=production_dns_oversize_worker)
+    assert supervisor.wait_ready(2.0)
+    pgid = supervisor.pgid
+    assert pgid is not None
+    started = time.monotonic()
+    result = supervisor.collect_all(
+        uuid4(),
+        uuid4(),
+        7,
+        ("/",),
+        (),
+        (),
+        (),
+        "unavailable",
+        None,
+        "watch_unavailable",
+        "10.0.0.10",
+        "baseline.fleetdoctor.test.",
+        budget=2.0,
+    )
+    assert time.monotonic() - started < 2.0
+    _assert_production_peers_survive_dns_failure(result)
+    assert supervisor.process is not None and not supervisor.stuck
+    supervisor.close()
+    assert supervisor.process is None and not supervisor.stuck
+    assert _group_members(pgid) == {}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="real production process-group semantics")
+def test_partial_dns_frame_preserves_all_five_peers_and_reaps_group() -> None:
+    supervisor = CollectionSupervisor(target=partial_dns_result_worker)
+    assert supervisor.wait_ready(2.0)
+    pgid = supervisor.pgid
+    assert pgid is not None
+    started = time.monotonic()
+    result = supervisor.collect_all(
+        uuid4(),
+        uuid4(),
+        7,
+        ("/",),
+        (),
+        (),
+        (),
+        "unavailable",
+        None,
+        "watch_unavailable",
+        "10.0.0.10",
+        "baseline.fleetdoctor.test.",
+        budget=3.0,
+    )
+    assert time.monotonic() - started < 3.2
+    assert result.filesystems[0].errors == ["diagnostic"]
+    assert result.cpu.errors == ["diagnostic"]
+    assert result.memory.host.errors == ["diagnostic"]
+    assert result.fd.errors == ["diagnostic"]
+    assert result.network.probe.errors == ["diagnostic"]
+    assert result.dns is not None and result.dns.query.status == "unavailable"
     assert supervisor.process is None and not supervisor.stuck
     assert _group_members(pgid) == {}

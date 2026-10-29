@@ -361,13 +361,13 @@ def test_config_severity_freeze_reload_staleness_and_api_bounds() -> None:
         {"offset": 10001},
         {"offset": -1},
         {"status": "x"},
+        {"rule": "cpu"},
         {"start": "2026-10-11T00:00:00"},
         {"start": "2026-10-12T00:00:00Z", "end": "2026-10-11T00:00:00Z"},
     ):
         assert rig.client.get("/diagnoses", params=params).status_code == 422
     for params in (
         {"node": "node-b"},
-        {"rule": "cpu"},
         {"node": "node-a' OR 1=1 --"},
         {"start": "2026-10-12T00:00:00Z"},
     ):

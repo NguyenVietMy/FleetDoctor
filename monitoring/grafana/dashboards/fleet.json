@@ -521,6 +521,42 @@
       "gridPos": {"x": 12, "y": 120, "w": 12, "h": 8},
       "targets": [{"expr": "fleetdoctor_active_incidents{rule=\"network_path_degradation\"}", "refId": "A", "legendFormat": "{{node}}"}],
       "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 80,
+      "title": "Fleet DNS query success",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 128, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_dns_query_success", "refId": "A", "legendFormat": "{{node}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 81,
+      "title": "Fleet DNS query duration",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 128, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_dns_query_duration_seconds", "refId": "A", "legendFormat": "{{node}}"}],
+      "fieldConfig": {"defaults": {"unit": "s", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 82,
+      "title": "Fleet DNS coverage and inconclusive state",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 136, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_dns_probe_coverage_ratio", "refId": "A", "legendFormat": "coverage {{node}}"}, {"expr": "fleetdoctor_dns_inconclusive", "refId": "B", "legendFormat": "inconclusive {{node}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
+    },
+    {
+      "id": 83,
+      "title": "Fleet active DNS incidents and capacity",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 136, "w": 12, "h": 8},
+      "targets": [{"expr": "fleetdoctor_active_incidents{rule=\"dns_resolution_failure\"}", "refId": "A", "legendFormat": "active {{node}}"}, {"expr": "fleetdoctor_dns_admission_capacity_available", "refId": "B", "legendFormat": "capacity {{node}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {"spanNulls": false, "insertNulls": false}}, "overrides": []}
     }
   ],
   "templating": {

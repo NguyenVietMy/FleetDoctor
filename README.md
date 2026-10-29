@@ -1,6 +1,6 @@
 # FleetDoctor
 
-Task09 adds strict schema-v5 direct-IPv4 network telemetry and a durable `network_path_degradation` lifecycle. Operational and evidence boundaries are documented in the [network runbook](docs/network-degradation.md) and [Task09 evidence status](docs/task09-evidence.md).
+Task10 adds schema-v6 bounded uncached DNS telemetry, parent-owned known-good baseline history, and a durable `dns_resolution_failure` lifecycle while preserving schema v1-v5. See the [DNS runbook](docs/dns-failure.md) and [Task10 evidence status](docs/task10-evidence.md). Ticket09 remains separately documented in the [network runbook](docs/network-degradation.md).
 
 FleetDoctor monitors a small Linux fleet and produces evidence-supported resource diagnoses. **Tasks 01 and 02 implement filesystem collection, healthy-fleet visibility and durable disk incident lifecycle.** Task02 passed local checks and two AWS functional lifecycles on 2026-10-11; see [Task02 evidence](docs/task02-evidence.md) for the frozen inspection record and verification limits. Task03 adds bounded outage delivery and reporting. Task04 adds durable bounded ingestion checkpoints and restart recovery; [Task04 evidence](docs/task04-evidence.md) separates builder proof from independent and live gates. Task05 adds strict v2 host CPU telemetry and CPU saturation. Task06 adds strict v3 host/workload memory telemetry and a generation-scoped workload-OOM lifecycle; see the [OOM runbook](docs/workload-oom.md) and [Task06 evidence status](docs/task06-evidence.md). Task07 adds inode exhaustion with an inode-specific lifecycle, bounded owned helper, and native ext4 proof; see the [inode runbook](docs/inode-exhaustion.md) and [Task07 evidence status](docs/task07-evidence.md). Task08 adds strict v4 process FD pressure, durable exact-identity watches, and a pidfd-only bounded helper; see the [FD runbook](docs/fd-pressure.md) and [Task08 evidence status](docs/task08-evidence.md). The [PRD](<FleetDoctor PRD.md>) owns the full project's requirements.
 
@@ -32,6 +32,7 @@ uv run python scripts/disk_helper_integration.py --output <external-path>/disk-h
 uv run python scripts/inode_helper_integration.py --output <external-path>/inode-native.json
 uv run python scripts/fd_helper_integration.py --output <external-path>/fd-native.json
 uv run python scripts/network_helper_integration.py --output <external-path>/network-native.json
+uv run python scripts/dns_helper_integration.py --output <external-path>/dns-native.json
 # Native Linux/WSL only; deliberately limited and not a saturation claim:
 uv run python scripts/cpu_smoke.py --workers 2 --seconds 5 --output <external-path>/cpu-smoke.json
 # Root Linux with systemd+cgroup v2 and Docker; real bounded kernel OOM:
@@ -54,7 +55,7 @@ uv run ruff format --check .
 uv run ruff check .
 uv run mypy src tests scripts
 uv run pytest
-uv run python -c "import fleetdoctor.agent, fleetdoctor.collector"
+uv run python -c "import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns"
 terraform -chdir=infra/aws fmt -check
 terraform -chdir=infra/aws init -backend=false -lockfile=readonly
 terraform -chdir=infra/aws validate
@@ -63,11 +64,12 @@ uv run python scripts/disk_helper_integration.py --output <external-path>/disk-h
 uv run python scripts/inode_helper_integration.py --output <external-path>/inode-native.json
 uv run python scripts/fd_helper_integration.py --output <external-path>/fd-native.json
 uv run python scripts/network_helper_integration.py --output <external-path>/network-native.json
+uv run python scripts/dns_helper_integration.py --output <external-path>/dns-native.json
 sudo $(command -v uv) run python scripts/oom_helper_integration.py --output <external-path>/oom-helper.json
 sudo $(command -v uv) run python scripts/oom_smoke.py --output <external-path>/oom-smoke.json
 ```
 
-Static checking targets Linux. Fixture tests also run on Windows; the isolated Docker checks exercise the complete root Linux fixture suite, actual Linux statvfs, and synthetic v4 service behavior. CI requires no AWS credentials or live model calls. Task06's dedicated Linux proof creates a bounded delegated cgroup, triggers a real kernel OOM kill, uses production memory collection and PostgreSQL/API persistence, resolves from three fresh observations, and removes only its owned unit/container. Task07's native proof creates a disposable ext4 filesystem with bounded inodes, uses production collection and real PostgreSQL/API persistence, proves independent watchdog cleanup after a killed partial writer, and removes its owned container, network, and anonymous database volume. Task08's native proof uses actual finite process limits/counts, the production agent and harness, real PostgreSQL, a separately namespaced healthy reference, release/exit recovery, and measured watchdog/worker expiry. These proofs do not claim AWS calibration, the five-run scenario gate, a healthy hour, overhead acceptance, or rendered-dashboard approval. Six diagnosis types, calibrated scenario batches, postmortem drafting and workload traces remain later tickets.
+Static checking targets Linux. Fixture tests also run on Windows; isolated Docker checks exercise the complete root/nonroot Linux suites and native helpers. The DNS proof uses an owned authoritative server plus the actual direct-resolver and systemd-resolved adapters and removes only uniquely named resources. These proofs do not claim AWS calibration, the five-run scenario gate, a healthy hour, overhead acceptance, or rendered-dashboard approval. Seven diagnosis types are implemented locally; I/O diagnosis, postmortem drafting and workload traces remain later tickets.
 
 ## File-descriptor pressure diagnosis
 

@@ -33,8 +33,12 @@ from fleetdoctor.fd import (
 from fleetdoctor.incidents import FdConfig, Incident
 from fleetdoctor.schema import (
     UNITS_V5,
+    UNITS_V6,
     CpuObservation,
     Delivery,
+    DnsBaselineObservation,
+    DnsObservation,
+    DnsQueryObservation,
     FdObservation,
     FdProcessIdentity,
     FdProcessObservation,
@@ -45,6 +49,7 @@ from fleetdoctor.schema import (
     NetworkProbeObservation,
     ProcessIdentity,
     ProcessObservation,
+    ResolverSnapshot,
     Sample,
     TcpNetworkObservation,
 )
@@ -954,6 +959,108 @@ def test_delivery_envelope_boundary_compacts_fd_context_before_queueing() -> Non
     assert len(saturated.entries) == 1
     assert len(saturated.entries[0].body) <= delivery.MAX_BODY
     assert saturated.discard_total == delivery.MAX_TOTAL and saturated.reasons == {}
+
+
+def test_max_dns_baseline_and_delivery_envelope_preserve_dns_and_fd_watch_facts() -> None:
+    network = NetworkObservation(
+        probe=NetworkProbeObservation(
+            status="available",
+            target="192.0.2.10",
+            sent=3,
+            received=3,
+            lost=0,
+            loss_ratio=0,
+            successful_sequences=[1, 2, 3],
+            successful_rtts_ms=[20.0, 20.0, 20.0],
+            median_rtt_ms=20.0,
+            route_error="fixture_unknown_route",
+        ),
+        tcp=TcpNetworkObservation(
+            retrans_segs=1,
+            rate_status="baseline",
+            curr_estab=1,
+            state_counts={"established": 1},
+            state_inventory="complete",
+        ),
+        interface_coverage="unavailable",
+        errors=["fixture"],
+    )
+    query = DnsQueryObservation(
+        status="success",
+        hostname="baseline.fleetdoctor.test.",
+        answers=[f"198.51.100.{index}" for index in range(1, 9)],
+        duration_seconds=1.2,
+        selected_server="192.0.2.53",
+        adapter="dnspython",
+    )
+    baseline = DnsBaselineObservation(
+        node_id="node-a",
+        boot_id=BOOT,
+        agent_session_id=SESSION,
+        sequence=0,
+        observed_at=NOW,
+        hostname="baseline.fleetdoctor.test.",
+        direct_ip_target="192.0.2.10",
+        query=query,
+        direct_ip_probe=network.probe,
+        resolver_fingerprint="a" * 64,
+        resolver_nameservers=["192.0.2.53"],
+    )
+    dns = DnsObservation(
+        hostname="baseline.fleetdoctor.test.",
+        direct_ip_target="192.0.2.10",
+        resolver=ResolverSnapshot(
+            status="available",
+            nameservers=["192.0.2.53"],
+            fingerprint="a" * 64,
+            entry_type="symlink",
+            link_target="/" + "r" * 3000,
+            errors=["payload_budget"],
+        ),
+        query=query,
+        baseline=baseline,
+        retention_coverage="complete",
+        context_trimmed=True,
+    )
+
+    def with_dns(errors: list[str]) -> Sample:
+        raw = combined_payload_sample(errors).model_dump(mode="json")
+        raw.update(
+            schema_version=6,
+            units=UNITS_V6,
+            network=network.model_dump(mode="json"),
+            dns=dns.model_dump(mode="json"),
+        )
+        return Sample.model_validate(raw)
+
+    target_size = 65_530
+    host_errors = ["m" * 1200 for _ in range(16)]
+    initial = with_dns(host_errors)
+    to_remove = len(initial.model_dump_json().encode()) - target_size
+    assert 0 <= to_remove <= sum(len(error) - 1 for error in host_errors)
+    for index, error in enumerate(host_errors):
+        removed = min(to_remove, len(error) - 1)
+        host_errors[index] = error[:-removed] if removed else error
+        to_remove -= removed
+    assert to_remove == 0
+    value = with_dns(host_errors)
+    assert len(value.model_dump_json().encode()) == target_size
+    bounded = payload_bounded_sample(value)
+    assert bounded.dns == dns
+    assert value.fd is not None
+    assert bounded.fd is not None
+    assert bounded.fd.context_trimmed
+    required = {item.identity.resource for item in value.fd.observations if item.watched}
+    assert {item.identity.resource for item in bounded.fd.observations} == required
+    enveloped = bounded.model_copy(update={"delivery": Delivery(discard_total=delivery.MAX_TOTAL)})
+    body = enveloped.model_dump_json().encode()
+    assert len(body) <= delivery.MAX_BODY
+    decoded = Sample.model_validate_json(body)
+    assert decoded.dns == dns
+    assert (
+        decoded.fd is not None
+        and {item.identity.resource for item in decoded.fd.observations} == required
+    )
 
 
 def test_max_delivery_reservation_warns_only_when_actual_enqueue_drops(

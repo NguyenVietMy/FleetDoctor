@@ -92,6 +92,14 @@ class NetworkConfig(BaseModel):
         return self
 
 
+class DnsConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+    direct_ip_rtt_max_ms: float = Field(default=150, gt=0, le=60_000)
+    consecutive_samples: int = Field(default=3, ge=1, le=120, strict=True)
+    max_gap_seconds: float = Field(default=10, gt=0, le=10)
+    severity: Literal["info", "warning", "critical"] = "warning"
+
+
 class Incident(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: UUID
@@ -104,11 +112,14 @@ class Incident(BaseModel):
         "workload_oom",
         "fd_pressure",
         "network_path_degradation",
+        "dns_resolution_failure",
     ] = "disk_block_exhaustion"
     status: Literal["active", "resolved"] = "active"
     severity: Literal["info", "warning", "critical"] = "critical"
     diagnosis: str
-    configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig
+    configuration: (
+        DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig | DnsConfig
+    )
     opening_evidence: dict[str, JsonValue]
     latest_evidence: dict[str, JsonValue]
     opened_at: datetime
@@ -128,7 +139,9 @@ class Incident(BaseModel):
         if not isinstance(value, dict) or not isinstance(value.get("configuration"), dict):
             return value
         rule = value.get("rule", "disk_block_exhaustion")
-        configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig
+        configuration: (
+            DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig | DnsConfig
+        )
         if rule == "disk_block_exhaustion":
             configuration = DiskConfig.model_validate(value["configuration"])
         elif rule == "inode_exhaustion":
@@ -141,6 +154,8 @@ class Incident(BaseModel):
             configuration = FdConfig.model_validate(value["configuration"])
         elif rule == "network_path_degradation":
             configuration = NetworkConfig.model_validate(value["configuration"])
+        elif rule == "dns_resolution_failure":
+            configuration = DnsConfig.model_validate(value["configuration"])
         else:
             return value
         result = dict(value)
@@ -156,6 +171,7 @@ class Incident(BaseModel):
             "workload_oom": OomConfig,
             "fd_pressure": FdConfig,
             "network_path_degradation": NetworkConfig,
+            "dns_resolution_failure": DnsConfig,
         }[self.rule]
         if not isinstance(self.configuration, expected):
             raise ValueError("incident rule and configuration disagree")
@@ -166,6 +182,7 @@ class Incident(BaseModel):
             "workload_oom": "memory_available",
             "fd_pressure": "fd_available",
             "network_path_degradation": "network_available",
+            "dns_resolution_failure": "dns_available",
         }[self.rule]
         if availability not in self.opening_evidence or availability not in self.latest_evidence:
             raise ValueError("incident evidence does not match rule")
@@ -182,6 +199,10 @@ class Incident(BaseModel):
                 raise ValueError("active FD incident cannot have a resolution reason")
         if self.rule == "network_path_degradation" and not self.resource.startswith("ipv4:"):
             raise ValueError("network path resource must be a configured IPv4 target")
+        if self.rule == "dns_resolution_failure" and not self.resource.startswith("dns:"):
+            raise ValueError(
+                "DNS resource must include the configured hostname and direct-IP target"
+            )
         if not self.investigation_steps or any(
             len(step) > 512 for step in self.investigation_steps
         ):
@@ -198,6 +219,7 @@ class Incident(BaseModel):
             "workload_oom": "memory_available",
             "fd_pressure": "fd_available",
             "network_path_degradation": "network_available",
+            "dns_resolution_failure": "dns_available",
         }[self.rule]
         result.update(
             evidence_age_seconds=max(0, age),

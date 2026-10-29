@@ -1,0 +1,27 @@
+{
+  "dashboards": [
+    {
+      "uid": "fleetdoctor-node",
+      "panels": [
+        {"id": 80, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "query_success"}]},
+        {"id": 81, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "query_duration_seconds"}]},
+        {"id": 82, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "query_coverage"}, {"refId": "B", "datasource": "prometheus", "semantic": "inconclusive"}]},
+        {"id": 83, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "capacity"}, {"refId": "B", "datasource": "prometheus", "semantic": "candidate_overflow"}]},
+        {"id": 84, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "active_incidents"}]},
+        {"id": 85, "targets": [{"refId": "A", "datasource": "incidents", "semantic": "explicit_opening_and_current_dns_evidence_and_steps"}]}
+      ]
+    },
+    {
+      "uid": "fleetdoctor-fleet",
+      "panels": [
+        {"id": 80, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "query_success"}]},
+        {"id": 81, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "query_duration_seconds"}]},
+        {"id": 82, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "query_coverage"}, {"refId": "B", "datasource": "prometheus", "semantic": "inconclusive"}]},
+        {"id": 83, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "active_incidents"}, {"refId": "B", "datasource": "prometheus", "semantic": "capacity"}]}
+      ]
+    }
+  ],
+  "required_states": ["healthy", "active_failure", "inconclusive", "unavailable", "stale", "resolved", "hostname_changed", "direct_ip_target_changed"],
+  "detail_minimum_dimensions": {"width": 2400, "height": 1800},
+  "graph_minimum_dimensions": {"width": 2000, "height": 900}
+}

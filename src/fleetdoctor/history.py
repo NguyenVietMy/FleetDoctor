@@ -46,6 +46,10 @@ HISTORY_METRICS = {
     "network_tcp_curr_estab": "fleetdoctor_network_tcp_curr_estab",
     "network_interface_rx_errors_total": "fleetdoctor_network_interface_rx_errors_total",
     "network_interface_rx_errors_per_second": "fleetdoctor_network_interface_rx_errors_per_second",
+    "dns_query_success": "fleetdoctor_dns_query_success",
+    "dns_query_duration_seconds": "fleetdoctor_dns_query_duration_seconds",
+    "dns_probe_coverage_ratio": "fleetdoctor_dns_probe_coverage_ratio",
+    "dns_inconclusive": "fleetdoctor_dns_inconclusive",
 }
 
 

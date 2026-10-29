@@ -19,6 +19,7 @@ from create_env import create
 from integration_cpu import prove as prove_cpu
 from integration_disk import PATH as DISK_PATH
 from integration_disk import prove
+from integration_dns import prove as prove_dns
 from integration_fd import prove as prove_fd
 from integration_inode import prove as prove_inode
 from integration_network import prove as prove_network
@@ -264,7 +265,16 @@ def main() -> None:
                         "bytes"
                         if "bytes" in expr
                         else "percentunit"
-                        if "ratio" in expr
+                        if "_ratio" in expr
+                        or any(
+                            metric in expr
+                            for metric in (
+                                "fleetdoctor_dns_query_success",
+                                "fleetdoctor_dns_inconclusive",
+                                "fleetdoctor_dns_admission_capacity_available",
+                                "fleetdoctor_dns_admission_candidate_overflow",
+                            )
+                        )
                         else "ops"
                         if "_per_second" in expr
                         else "s"
@@ -354,6 +364,8 @@ def main() -> None:
             prove_fd(api, prom, grafana, values, compose, evidence["fd_incidents"], stat)
             evidence["network_incidents"] = {}
             prove_network(api, prom, values, compose, evidence["network_incidents"])
+            evidence["dns_incidents"] = {}
+            prove_dns(api, prom, values, compose, evidence["dns_incidents"])
             evidence["outage_and_replay"] = {}
             asyncio.run(prove_outage(api, prom, grafana, values, evidence["outage_and_replay"]))
             evidence["source_after"] = source_manifest()

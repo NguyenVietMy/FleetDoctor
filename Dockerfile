@@ -28,4 +28,9 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends e2fsprogs util-linux mount && rm -rf /var/lib/apt/lists/*
 CMD ["/app/.venv/bin/python", "scripts/disk_helper_probe.py"]
 
+FROM test AS dns-resolved-test
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends systemd-resolved dbus && rm -rf /var/lib/apt/lists/*
+CMD ["/app/.venv/bin/python", "scripts/dns_resolved_integration_probe.py"]
+
 FROM base AS production

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from datetime import UTC, datetime
 from threading import Lock
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import httpx
@@ -36,13 +36,19 @@ from fleetdoctor.history import HISTORY_METRICS, HistoryClient, validate_range
 from fleetdoctor.incidents import (
     CpuConfig,
     DiskConfig,
+    DnsConfig,
     FdConfig,
     InodeConfig,
     NetworkConfig,
     OomConfig,
 )
 from fleetdoctor.memory import validate_cgroup_paths
-from fleetdoctor.rules import MAX_ACTIVE_NETWORK_RESOURCES, CompositeEvaluator
+from fleetdoctor.rules import (
+    MAX_ACTIVE_DNS_RESOURCES,
+    MAX_ACTIVE_NETWORK_RESOURCES,
+    CompositeEvaluator,
+    dns_evidence,
+)
 from fleetdoctor.schema import FIELDS, Sample, WorkloadMemoryObservation
 from fleetdoctor.store import IncidentStore, PostgresStore, StoreError, StoreSnapshot
 
@@ -84,6 +90,7 @@ class State:
         oom_config: OomConfig | None = None,
         fd_config: FdConfig | None = None,
         network_config: NetworkConfig | None = None,
+        dns_config: DnsConfig | None = None,
         cgroup_paths: tuple[str, ...] = (),
     ) -> None:
         self.nodes, self.paths, self.clock = nodes, paths, clock
@@ -103,6 +110,7 @@ class State:
         )
         self.oom_config, self.fd_config = oom_config or OomConfig(), fd_config or FdConfig()
         self.network_config = network_config or NetworkConfig()
+        self.dns_config = dns_config or DnsConfig()
         self.cgroup_paths = cgroup_paths
         snapshot = store.snapshot(set(nodes))
         self.evaluator = CompositeEvaluator(snapshot.active)
@@ -186,6 +194,7 @@ class State:
                 self.oom_config,
                 self.fd_config,
                 self.network_config,
+                self.dns_config,
             )
             retired = list(self.retired[sample.node_id])
             if previous and identity != prev_identity:
@@ -239,6 +248,7 @@ class State:
                         "workload_oom",
                         "fd_pressure",
                         "network_path_degradation",
+                        "dns_resolution_failure",
                     )
                 }
                 if active is not None
@@ -248,8 +258,14 @@ class State:
             memory = sample.memory if sample else None
             fd = sample.fd if sample else None
             network = sample.network if sample else None
+            dns = sample.dns if sample else None
             fd_active_count = (
                 sum(i.node_id == node and i.rule == "fd_pressure" for i in active)
+                if active is not None
+                else None
+            )
+            dns_active_count = (
+                sum(i.node_id == node and i.rule == "dns_resolution_failure" for i in active)
                 if active is not None
                 else None
             )
@@ -405,9 +421,29 @@ class State:
                     if fresh and network is not None
                     else ["observation_not_fresh" if sample else "observation_unavailable"],
                 },
+                "dns_coverage": {
+                    "query": dns.query.status if fresh and dns is not None else "unavailable",
+                    "resolver": dns.resolver.status if fresh and dns is not None else "unavailable",
+                    "retention": dns.retention_coverage
+                    if fresh and dns is not None
+                    else "unavailable",
+                    "admission_capacity": (
+                        "unavailable"
+                        if dns_active_count is None or dns_active_count >= MAX_ACTIVE_DNS_RESOURCES
+                        else "available"
+                    ),
+                    "candidate_overflow": node in self.evaluator.dns.admission_overflow_nodes,
+                    "errors": (
+                        [dns.query.error] if fresh and dns is not None and dns.query.error else []
+                    )
+                    if fresh
+                    else ["observation_not_fresh" if sample else "observation_unavailable"],
+                },
                 "sample": sample.model_dump(
                     mode="json",
-                    exclude=set() if fresh else {"filesystems", "cpu", "memory", "fd", "network"},
+                    exclude=set()
+                    if fresh
+                    else {"filesystems", "cpu", "memory", "fd", "network", "dns"},
                 )
                 if sample
                 else None,
@@ -420,6 +456,7 @@ class State:
                 "network": network.model_dump(mode="json")
                 if network is not None and fresh
                 else None,
+                "dns": dns.model_dump(mode="json") if dns is not None and fresh else None,
             }
 
     def fd_watch(self, node: str) -> WatchResponse:
@@ -469,6 +506,7 @@ def create_app(
     oom_config: OomConfig | None = None,
     fd_config: FdConfig | None = None,
     network_config: NetworkConfig | None = None,
+    dns_config: DnsConfig | None = None,
     cgroup_paths: tuple[str, ...] = (),
 ) -> FastAPI:
     if not nodes or len(nodes) > 16 or any(len(v.get_secret_value()) < 32 for v in nodes.values()):
@@ -488,6 +526,7 @@ def create_app(
         oom_config or OomConfig(),
         fd_config or FdConfig(),
         network_config or NetworkConfig(),
+        dns_config or DnsConfig(),
         cgroup_paths,
     )
     app = FastAPI(title="FleetDoctor", version="0.1.0")
@@ -522,6 +561,7 @@ def create_app(
             "oom_rule": state.oom_config.model_dump(),
             "fd_rule": state.fd_config.model_dump(),
             "network_rule": state.network_config.model_dump(),
+            "dns_rule": state.dns_config.model_dump(),
             "filesystems": list(paths),
             "cgroups": list(cgroup_paths),
             "cadence_seconds": 5,
@@ -540,7 +580,7 @@ def create_app(
             "status": "ok",
             "storage": "incidents_and_ingestion_checkpoints_durable",
             "sample_history": "not_persisted",
-            "slice": "09",
+            "slice": "10",
         }
 
     @app.get("/nodes/{node}/fd-watch")
@@ -616,7 +656,16 @@ def create_app(
     @app.get("/diagnoses")
     def diagnoses(
         node: str | None = None,
-        rule: str | None = None,
+        rule: Literal[
+            "disk_block_exhaustion",
+            "inode_exhaustion",
+            "cpu_saturation",
+            "workload_oom",
+            "fd_pressure",
+            "network_path_degradation",
+            "dns_resolution_failure",
+        ]
+        | None = None,
         status: str | None = Query(None, pattern="^(active|resolved)$"),
         start: datetime | None = None,
         end: datetime | None = None,
@@ -945,6 +994,42 @@ def create_app(
             ["node"],
             registry=registry,
         )
+        dns_query_success_g = Gauge(
+            "fleetdoctor_dns_query_success",
+            "Fresh measured uncached DNS A query succeeded",
+            ["node"],
+            registry=registry,
+        )
+        dns_query_duration_g = Gauge(
+            "fleetdoctor_dns_query_duration_seconds",
+            "Fresh uncached DNS query elapsed duration",
+            ["node"],
+            registry=registry,
+        )
+        dns_coverage_g = Gauge(
+            "fleetdoctor_dns_probe_coverage_ratio",
+            "Fresh DNS query is a measured success or resolver response failure",
+            ["node"],
+            registry=registry,
+        )
+        dns_inconclusive_g = Gauge(
+            "fleetdoctor_dns_inconclusive",
+            "Latest fresh DNS observation is inconclusive for diagnosis",
+            ["node"],
+            registry=registry,
+        )
+        dns_admission_g = Gauge(
+            "fleetdoctor_dns_admission_capacity_available",
+            "DNS incident admission capacity is available",
+            ["node"],
+            registry=registry,
+        )
+        dns_overflow_g = Gauge(
+            "fleetdoctor_dns_admission_candidate_overflow",
+            "A qualifying DNS candidate was rejected by the active incident cap",
+            ["node"],
+            registry=registry,
+        )
         network_overflow_g = Gauge(
             "fleetdoctor_network_admission_candidate_overflow",
             "A qualifying network candidate was rejected by the active incident cap",
@@ -1145,6 +1230,32 @@ def create_app(
                         rate = interface[field + "_per_second"]
                         if rate is not None:
                             network_interface_rates[field].labels(node, name).set(rate)
+            dns_coverage = view["dns_coverage"]
+            measured_dns = dns_coverage["query"] in ("success", "failure")
+            dns_coverage_g.labels(node).set(int(view["fresh"] and measured_dns))
+            dns_admission_g.labels(node).set(int(dns_coverage["admission_capacity"] == "available"))
+            dns_overflow_g.labels(node).set(int(dns_coverage["candidate_overflow"]))
+            dns_value = view["dns"]
+            latest_sample = state.latest.get(node) if view["fresh"] else None
+            if dns_value is not None and latest_sample is not None:
+                query = dns_value["query"]
+                if measured_dns:
+                    dns_query_success_g.labels(node).set(int(query["status"] == "success"))
+                    if query["duration_seconds"] is not None:
+                        dns_query_duration_g.labels(node).set(query["duration_seconds"])
+                active = None
+                if dns_value.get("hostname") and dns_value.get("direct_ip_target"):
+                    resource = state.evaluator.dns.resource(
+                        dns_value["hostname"], dns_value["direct_ip_target"]
+                    )
+                    active = state.evaluator.dns.active.get((node, resource))
+                metric_config = (
+                    active.configuration
+                    if active is not None and isinstance(active.configuration, DnsConfig)
+                    else state.dns_config
+                )
+                facts = dns_evidence(latest_sample, metric_config)
+                dns_inconclusive_g.labels(node).set(int(facts["dns_conclusive"] is not True))
         return Response(
             generate_latest(registry), media_type="text/plain; version=0.0.4; charset=utf-8"
         )
@@ -1165,5 +1276,6 @@ def app_factory() -> FastAPI:
         network_config=NetworkConfig.model_validate_json(
             os.getenv("FLEETDOCTOR_NETWORK_RULE", "{}")
         ),
+        dns_config=DnsConfig.model_validate_json(os.getenv("FLEETDOCTOR_DNS_RULE", "{}")),
         cgroup_paths=validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", "")),
     )

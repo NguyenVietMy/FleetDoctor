@@ -254,6 +254,7 @@ def test_cpu_trigger_recovery_metrics_staleness_and_history_mapping() -> None:
         "workload_oom": 0,
         "fd_pressure": 0,
         "network_path_degradation": 0,
+        "dns_resolution_failure": 0,
     }
     assert view["cpu"]["runnable_processes"] == 3
     metrics = client.get("/metrics").text

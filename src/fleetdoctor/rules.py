@@ -9,13 +9,21 @@ from fleetdoctor.fd import MAX_ACTIVE_WATCHES, parse_resource
 from fleetdoctor.incidents import (
     CpuConfig,
     DiskConfig,
+    DnsConfig,
     FdConfig,
     Incident,
     InodeConfig,
     NetworkConfig,
     OomConfig,
 )
-from fleetdoctor.schema import FdProcessObservation, Filesystem, Sample, WorkloadMemoryObservation
+from fleetdoctor.schema import (
+    DnsBaselineObservation,
+    FdProcessObservation,
+    Filesystem,
+    NetworkProbeObservation,
+    Sample,
+    WorkloadMemoryObservation,
+)
 
 
 def evidence(sample: Sample, fs: Filesystem) -> dict[str, Any]:
@@ -39,7 +47,14 @@ class Window:
     opening: int = 0
     recovery: int = 0
     configuration: (
-        DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig | None
+        DiskConfig
+        | InodeConfig
+        | CpuConfig
+        | OomConfig
+        | FdConfig
+        | NetworkConfig
+        | DnsConfig
+        | None
     ) = None
     guard_percent: float | None = None
     exit_confirmations: int = 0
@@ -931,6 +946,243 @@ class NetworkEvaluator:
         return changes
 
 
+MAX_ACTIVE_DNS_RESOURCES = 16
+
+
+def _healthy_direct_ip(
+    probe: NetworkProbeObservation | None, target: str, threshold: float
+) -> bool:
+    return bool(
+        probe is not None
+        and probe.status == "available"
+        and probe.target == target
+        and probe.sent == 3
+        and probe.received == 3
+        and probe.lost == 0
+        and probe.median_rtt_ms is not None
+        and probe.median_rtt_ms < threshold
+    )
+
+
+def _valid_dns_baseline(
+    sample: Sample, baseline: DnsBaselineObservation | None, threshold: float
+) -> tuple[bool, str | None]:
+    dns = sample.dns
+    if dns is None or dns.hostname is None or dns.direct_ip_target is None:
+        return False, "dns_unconfigured"
+    if baseline is None:
+        return False, "known_good_baseline_missing"
+    if (
+        baseline.node_id != sample.node_id
+        or baseline.boot_id != sample.boot_id
+        or baseline.agent_session_id != sample.agent_session_id
+        or baseline.hostname != dns.hostname
+        or baseline.direct_ip_target != dns.direct_ip_target
+    ):
+        return False, "known_good_baseline_scope_mismatch"
+    age = (sample.observed_at - baseline.observed_at).total_seconds()
+    if not 0 <= age <= 3600 or baseline.sequence > sample.sequence:
+        return False, "known_good_baseline_expired_or_future"
+    current_identity = (
+        baseline.sequence == sample.sequence and baseline.observed_at == sample.observed_at
+    )
+    if dns.query.status == "failure" and (
+        baseline.sequence >= sample.sequence or baseline.observed_at >= sample.observed_at
+    ):
+        return False, "known_good_baseline_not_historical"
+    if current_identity:
+        probe = sample.network.probe if sample.network is not None else None
+        if (
+            baseline.query != dns.query
+            or probe is None
+            or baseline.direct_ip_probe != probe
+            or baseline.resolver_fingerprint != dns.resolver.fingerprint
+            or baseline.resolver_nameservers != dns.resolver.nameservers
+        ):
+            return False, "known_good_baseline_current_fact_mismatch"
+    if not _healthy_direct_ip(baseline.direct_ip_probe, dns.direct_ip_target, threshold):
+        return False, "known_good_baseline_ip_not_healthy"
+    return True, None
+
+
+def dns_evidence(
+    sample: Sample,
+    config: DnsConfig,
+    *,
+    scope_changed: bool = False,
+) -> dict[str, Any]:
+    dns = sample.dns
+    probe = sample.network.probe if sample.network is not None else None
+    if dns is None or dns.hostname is None or dns.direct_ip_target is None or scope_changed:
+        reason = "scope_changed" if scope_changed else "dns_unavailable"
+        return {
+            "node_id": sample.node_id,
+            "boot_id": str(sample.boot_id),
+            "agent_session_id": str(sample.agent_session_id),
+            "sequence": sample.sequence,
+            "observed_at": sample.observed_at.isoformat(),
+            "dns_available": False,
+            "dns_conclusive": False,
+            "inconclusive_reason": reason,
+            "dns": dns.model_dump(mode="json") if dns is not None else None,
+            "direct_ip_probe": probe.model_dump(mode="json") if probe is not None else None,
+            "frozen_direct_ip_rtt_max_ms": config.direct_ip_rtt_max_ms,
+        }
+    direct_healthy = _healthy_direct_ip(probe, dns.direct_ip_target, config.direct_ip_rtt_max_ms)
+    baseline_valid, baseline_reason = _valid_dns_baseline(
+        sample, dns.baseline, config.direct_ip_rtt_max_ms
+    )
+    measured = dns.query.status in ("success", "failure")
+    conclusive = measured and direct_healthy and (dns.query.status == "success" or baseline_valid)
+    inconclusive_reason: str | None = None
+    if not measured:
+        inconclusive_reason = "dns_query_unavailable"
+    elif not direct_healthy:
+        inconclusive_reason = "direct_ip_not_healthy"
+    elif dns.query.status == "failure" and not baseline_valid:
+        inconclusive_reason = baseline_reason
+    return {
+        "node_id": sample.node_id,
+        "boot_id": str(sample.boot_id),
+        "agent_session_id": str(sample.agent_session_id),
+        "sequence": sample.sequence,
+        "observed_at": sample.observed_at.isoformat(),
+        "dns_available": measured,
+        "dns_conclusive": conclusive,
+        "inconclusive_reason": inconclusive_reason,
+        "hostname": dns.hostname,
+        "direct_ip_target": dns.direct_ip_target,
+        "query": dns.query.model_dump(mode="json"),
+        "resolver": dns.resolver.model_dump(mode="json"),
+        "baseline": dns.baseline.model_dump(mode="json") if dns.baseline is not None else None,
+        "retention_coverage": dns.retention_coverage,
+        "candidate_error": dns.candidate_error,
+        "direct_ip_probe": probe.model_dump(mode="json") if probe is not None else None,
+        "direct_ip_healthy": direct_healthy,
+        "frozen_direct_ip_rtt_max_ms": config.direct_ip_rtt_max_ms,
+    }
+
+
+class DnsEvaluator:
+    def __init__(self, active: list[Incident]) -> None:
+        self.active = {(item.node_id, item.resource): item for item in active}
+        self.windows: dict[tuple[str, str], Window] = {}
+        self.reloaded = {item.id for item in active}
+        self.admission_overflow_nodes: set[str] = set()
+
+    @staticmethod
+    def resource(hostname: str, target: str) -> str:
+        return f"dns:{hostname}|ipv4:{target}"
+
+    def evaluate(
+        self, sample: Sample, previous: Sample | None, now: datetime, config: DnsConfig
+    ) -> list[Incident]:
+        changes: list[Incident] = []
+        self.admission_overflow_nodes.discard(sample.node_id)
+        dns = sample.dns
+        hostname = dns.hostname if dns is not None else None
+        target = dns.direct_ip_target if dns is not None else None
+        resource = self.resource(hostname, target) if hostname and target else None
+        for key, active_incident in list(self.active.items()):
+            if active_incident.node_id != sample.node_id or key[1] == resource:
+                continue
+            measured = active_incident.configuration
+            assert isinstance(measured, DnsConfig)
+            updated = active_incident.model_copy(deep=True)
+            updated.latest_evidence = dns_evidence(sample, measured, scope_changed=True)
+            updated.observed_at = sample.observed_at
+            updated.evaluated_at = updated.updated_at = now
+            self.active[key] = updated
+            self.windows.pop(key, None)
+            self.reloaded.discard(updated.id)
+            changes.append(updated)
+        if resource is None or dns is None or hostname is None or target is None:
+            return changes
+        key = sample.node_id, resource
+        incident = self.active.get(key)
+        measured = incident.configuration if incident is not None else config
+        assert isinstance(measured, DnsConfig)
+        previous_dns = previous.dns if previous is not None else None
+        continuity = bool(
+            previous is not None
+            and previous.boot_id == sample.boot_id
+            and previous.agent_session_id == sample.agent_session_id
+            and 0
+            < (sample.observed_at - previous.observed_at).total_seconds()
+            <= measured.max_gap_seconds
+            and previous_dns is not None
+            and previous_dns.hostname == hostname
+            and previous_dns.direct_ip_target == target
+        )
+        for pending_key in list(self.windows):
+            if (
+                pending_key[0] == sample.node_id
+                and pending_key != key
+                and pending_key not in self.active
+            ):
+                self.windows.pop(pending_key)
+        window = self.windows.setdefault(key, Window())
+        if not continuity or window.configuration != measured:
+            window.opening = window.recovery = 0
+            window.configuration = measured
+        facts = dns_evidence(sample, measured)
+        conclusive = facts["dns_conclusive"] is True
+        opening = conclusive and dns.query.status == "failure"
+        recovery = conclusive and dns.query.status == "success"
+        if incident is not None:
+            window.opening = 0
+            window.recovery = window.recovery + 1 if recovery else 0
+            updated = incident.model_copy(deep=True)
+            updated.latest_evidence = facts
+            updated.observed_at = sample.observed_at
+            updated.evaluated_at = updated.updated_at = now
+            if window.recovery >= measured.consecutive_samples:
+                updated.status = "resolved"
+                updated.resolved_at = now
+                self.active.pop(key)
+                window.recovery = 0
+            else:
+                self.active[key] = updated
+            self.reloaded.discard(updated.id)
+            changes.append(updated)
+            return changes
+        window.recovery = 0
+        window.opening = window.opening + 1 if opening else 0
+        if window.opening < measured.consecutive_samples:
+            return changes
+        active_for_node = sum(node == sample.node_id for node, _ in self.active)
+        if active_for_node >= MAX_ACTIVE_DNS_RESOURCES:
+            self.admission_overflow_nodes.add(sample.node_id)
+            window.opening = 0
+            return changes
+        opened = Incident(
+            id=uuid4(),
+            node_id=sample.node_id,
+            resource=resource,
+            rule="dns_resolution_failure",
+            severity=measured.severity,
+            diagnosis=f"DNS resolution for {hostname} failed while direct-IP reachability remained healthy",
+            configuration=measured,
+            opening_evidence=facts,
+            latest_evidence=facts,
+            opened_at=now,
+            observed_at=sample.observed_at,
+            evaluated_at=now,
+            updated_at=now,
+            investigation_steps=[
+                "Confirm the recorded uncached A-query failure and current resolver fingerprint",
+                "Compare the bounded current nameserver list with the immutable known-good baseline",
+                "Verify the exact three-packet direct-IP probe remains zero-loss below the frozen RTT limit",
+                "Inspect systemd-resolved service and resolver configuration without changing ingestion addressing",
+                "Restore only the owned resolver fault and require three fresh matching DNS/IP successes",
+            ],
+        )
+        self.active[key] = opened
+        window.opening = 0
+        changes.append(opened)
+        return changes
+
+
 class CompositeEvaluator:
     def __init__(self, active: list[Incident]) -> None:
         self.disk = DiskEvaluator([i for i in active if i.rule == "disk_block_exhaustion"])
@@ -939,6 +1191,7 @@ class CompositeEvaluator:
         self.oom = OomEvaluator([i for i in active if i.rule == "workload_oom"])
         self.fd = FdEvaluator([i for i in active if i.rule == "fd_pressure"])
         self.network = NetworkEvaluator([i for i in active if i.rule == "network_path_degradation"])
+        self.dns = DnsEvaluator([i for i in active if i.rule == "dns_resolution_failure"])
 
     @property
     def active(self) -> dict[tuple[str, str, str], Incident]:
@@ -951,6 +1204,7 @@ class CompositeEvaluator:
                 *self.oom.active.values(),
                 *self.fd.active.values(),
                 *self.network.active.values(),
+                *self.dns.active.values(),
             ]
         }
 
@@ -963,10 +1217,19 @@ class CompositeEvaluator:
             | set(self.oom.reloaded)
             | set(self.fd.reloaded)
             | set(self.network.reloaded)
+            | set(self.dns.reloaded)
         )
 
     def reset_node(self, node: str) -> None:
-        for evaluator in (self.disk, self.inode, self.cpu, self.oom, self.fd, self.network):
+        for evaluator in (
+            self.disk,
+            self.inode,
+            self.cpu,
+            self.oom,
+            self.fd,
+            self.network,
+            self.dns,
+        ):
             for key in list(evaluator.windows):
                 if key[0] == node:
                     evaluator.windows.pop(key)
@@ -985,6 +1248,9 @@ class CompositeEvaluator:
         self.fd.active = {(i.node_id, i.resource): i for i in records if i.rule == "fd_pressure"}
         self.network.active = {
             (i.node_id, i.resource): i for i in records if i.rule == "network_path_degradation"
+        }
+        self.dns.active = {
+            (i.node_id, i.resource): i for i in records if i.rule == "dns_resolution_failure"
         }
         for node in affected:
             self.reset_node(node)
@@ -1006,6 +1272,9 @@ class CompositeEvaluator:
         self.network.reloaded.update(
             i.id for i in records if i.rule == "network_path_degradation" and i.node_id in affected
         )
+        self.dns.reloaded.update(
+            i.id for i in records if i.rule == "dns_resolution_failure" and i.node_id in affected
+        )
 
     def evaluate(
         self,
@@ -1018,6 +1287,7 @@ class CompositeEvaluator:
         oom_config: OomConfig,
         fd_config: FdConfig,
         network_config: NetworkConfig | None = None,
+        dns_config: DnsConfig | None = None,
     ) -> list[Incident]:
         return [
             *self.disk.evaluate(sample, previous, now, disk_config),
@@ -1026,4 +1296,5 @@ class CompositeEvaluator:
             *self.oom.evaluate(sample, previous, now, oom_config),
             *self.fd.evaluate(sample, previous, now, fd_config),
             *self.network.evaluate(sample, previous, now, network_config or NetworkConfig()),
+            *self.dns.evaluate(sample, previous, now, dns_config or DnsConfig()),
         ]

@@ -49,6 +49,12 @@ NETWORK_UNITS = {
     "interface_counter_rate": "per_second",
 }
 UNITS_V5 = {**UNITS_V4, **NETWORK_UNITS}
+DNS_UNITS = {
+    "dns_query_duration": "seconds",
+    "dns_answer_count": "count",
+    "dns_baseline_age": "seconds",
+}
+UNITS_V6 = {**UNITS_V5, **DNS_UNITS}
 FIELDS = (
     "total_bytes",
     "free_bytes",
@@ -63,6 +69,40 @@ FIELDS = (
 
 class WireModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+
+def _canonical_dns_hostname(value: str) -> str:
+    if value != value.lower() or not value.endswith("."):
+        raise ValueError("DNS hostname must be lowercase and absolute")
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("DNS hostname must be ASCII") from exc
+    labels = value[:-1].split(".")
+    if len(labels) < 2 or any(
+        not label
+        or len(label) > 63
+        or re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label) is None
+        for label in labels
+    ):
+        raise ValueError("DNS hostname contains an invalid label")
+    if len(encoded) > 254 or sum(len(label) + 1 for label in labels) + 1 > 255:
+        raise ValueError("DNS hostname exceeds wire length")
+    return value
+
+
+def _canonical_usable_ipv4(value: str) -> str:
+    address = ipaddress.ip_address(value)
+    if (
+        address.version != 4
+        or str(address) != value
+        or address.is_unspecified
+        or address.is_multicast
+        or address.is_reserved
+        or value == "255.255.255.255"
+    ):
+        raise ValueError("target must be usable canonical IPv4")
+    return value
 
 
 class Filesystem(WireModel):
@@ -718,8 +758,216 @@ class NetworkObservation(WireModel):
         return self
 
 
+class ResolverSnapshot(WireModel):
+    status: Literal["available", "unavailable", "unconfigured"]
+    nameservers: list[str] = Field(default_factory=list, max_length=3)
+    fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    entry_type: Literal["regular", "symlink"] | None = None
+    link_target: str | None = Field(default=None, min_length=1, max_length=4096)
+    known_systemd_stub: bool = False
+    errors: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("nameservers")
+    @classmethod
+    def canonical_nameservers(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("duplicate resolver nameserver")
+        for value in values:
+            address = ipaddress.ip_address(value)
+            if str(address) != value:
+                raise ValueError("resolver nameserver must be canonical numeric IP")
+        return values
+
+    @model_validator(mode="after")
+    def consistent_resolver(self) -> Self:
+        if self.status == "available":
+            if not self.nameservers or self.fingerprint is None or self.entry_type is None:
+                raise ValueError("available resolver requires nameservers and identity")
+            if self.entry_type == "symlink" and self.link_target is None:
+                raise ValueError("symlink resolver requires link target")
+            if self.entry_type == "regular" and self.link_target is not None:
+                raise ValueError("regular resolver cannot carry link target")
+        elif self.nameservers or self.fingerprint is not None or self.entry_type is not None:
+            raise ValueError("unavailable resolver cannot carry trusted configuration")
+        if self.status != "available" and not self.errors:
+            raise ValueError("unavailable resolver requires an error")
+        if any(not error or len(error) > 128 for error in self.errors):
+            raise ValueError("resolver error must contain 1..128 characters")
+        return self
+
+
+class DnsQueryObservation(WireModel):
+    status: Literal["success", "failure", "unavailable", "unconfigured"]
+    hostname: str | None = Field(default=None, min_length=3, max_length=254)
+    qtype: Literal["A"] = "A"
+    answers: list[str] = Field(default_factory=list, max_length=8)
+    duration_seconds: Annotated[float, Field(ge=0, le=3, allow_inf_nan=False)] | None = None
+    selected_server: str | None = None
+    error: str | None = Field(default=None, min_length=1, max_length=128)
+    adapter: Literal["dnspython", "systemd-resolved", "none"] = "none"
+
+    @field_validator("hostname")
+    @classmethod
+    def canonical_query_hostname(cls, value: str | None) -> str | None:
+        return _canonical_dns_hostname(value) if value is not None else None
+
+    @field_validator("answers")
+    @classmethod
+    def canonical_answers(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("duplicate DNS answer")
+        for value in values:
+            address = ipaddress.ip_address(value)
+            if address.version != 4 or str(address) != value:
+                raise ValueError("DNS A answer must be canonical IPv4")
+        return values
+
+    @field_validator("selected_server")
+    @classmethod
+    def canonical_server(cls, value: str | None) -> str | None:
+        if value is not None and str(ipaddress.ip_address(value)) != value:
+            raise ValueError("selected resolver server must be canonical numeric IP")
+        return value
+
+    @model_validator(mode="after")
+    def consistent_query(self) -> Self:
+        measured = self.status in ("success", "failure")
+        if measured and (self.hostname is None or self.duration_seconds is None):
+            raise ValueError("measured DNS query requires hostname and duration")
+        if measured and self.adapter == "none":
+            raise ValueError("measured DNS query requires a supported adapter")
+        if self.status == "success" and (not self.answers or self.error is not None):
+            raise ValueError("successful DNS query requires answers and no error")
+        if self.status in ("failure", "unavailable") and self.error is None:
+            raise ValueError("failed or unavailable DNS query requires an error")
+        if self.status != "success" and self.answers:
+            raise ValueError("non-successful DNS query cannot carry answers")
+        if self.status == "unconfigured" and self.hostname is not None:
+            raise ValueError("unconfigured DNS query cannot carry a hostname")
+        if self.status == "unconfigured" and self.error is None:
+            raise ValueError("unconfigured DNS query requires an explanation")
+        return self
+
+
+class DnsBaselineObservation(WireModel):
+    node_id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
+    boot_id: UUID
+    agent_session_id: UUID
+    sequence: Count
+    observed_at: datetime
+    hostname: str = Field(min_length=3, max_length=254)
+    direct_ip_target: str = Field(pattern=r"^(?:\d{1,3}\.){3}\d{1,3}$")
+    query: DnsQueryObservation
+    direct_ip_probe: NetworkProbeObservation
+    resolver_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    resolver_nameservers: list[str] = Field(min_length=1, max_length=3)
+
+    @field_validator("hostname")
+    @classmethod
+    def canonical_baseline_hostname(cls, value: str) -> str:
+        return _canonical_dns_hostname(value)
+
+    @field_validator("direct_ip_target")
+    @classmethod
+    def canonical_baseline_target(cls, value: str) -> str:
+        return _canonical_usable_ipv4(value)
+
+    @field_validator("resolver_nameservers")
+    @classmethod
+    def canonical_baseline_nameservers(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("duplicate baseline resolver nameserver")
+        for value in values:
+            if str(ipaddress.ip_address(value)) != value:
+                raise ValueError("baseline nameserver must be canonical numeric IP")
+        return values
+
+    @field_validator("observed_at")
+    @classmethod
+    def aware_baseline_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("DNS baseline time must include timezone")
+        return value
+
+    @model_validator(mode="after")
+    def consistent_baseline(self) -> Self:
+        if self.query.status != "success" or self.query.hostname != self.hostname:
+            raise ValueError("DNS baseline requires matching successful query")
+        probe = self.direct_ip_probe
+        if (
+            probe.status != "available"
+            or probe.target != self.direct_ip_target
+            or probe.sent != 3
+            or probe.received != 3
+            or probe.lost != 0
+            or probe.median_rtt_ms is None
+        ):
+            raise ValueError("DNS baseline requires exact successful three-packet IP probe")
+        if len(self.model_dump_json().encode("utf-8")) > 3072:
+            raise ValueError("DNS baseline exceeds 3072 bytes")
+        return self
+
+
+class DnsObservation(WireModel):
+    hostname: str | None = Field(default=None, min_length=3, max_length=254)
+    direct_ip_target: str | None = Field(default=None, pattern=r"^(?:\d{1,3}\.){3}\d{1,3}$")
+    resolver: ResolverSnapshot
+    query: DnsQueryObservation
+    baseline: DnsBaselineObservation | None = None
+    retention_coverage: Literal["complete", "incomplete", "unavailable"] = "unavailable"
+    candidate_error: str | None = Field(default=None, min_length=1, max_length=128)
+    context_trimmed: bool = False
+    elapsed_seconds: Annotated[float, Field(ge=0, le=3, allow_inf_nan=False)] | None = None
+
+    @field_validator("hostname")
+    @classmethod
+    def canonical_observation_hostname(cls, value: str | None) -> str | None:
+        return _canonical_dns_hostname(value) if value is not None else None
+
+    @field_validator("direct_ip_target")
+    @classmethod
+    def canonical_observation_target(cls, value: str | None) -> str | None:
+        return _canonical_usable_ipv4(value) if value is not None else None
+
+    @classmethod
+    def unavailable(
+        cls, hostname: str | None, direct_ip_target: str | None, error: str
+    ) -> "DnsObservation":
+        status: Literal["unavailable", "unconfigured"] = (
+            "unconfigured" if hostname is None else "unavailable"
+        )
+        if hostname is None:
+            direct_ip_target = None
+        return cls(
+            hostname=hostname,
+            direct_ip_target=direct_ip_target,
+            resolver=ResolverSnapshot(status=status, errors=[error]),
+            query=DnsQueryObservation(status=status, hostname=hostname, error=error),
+            retention_coverage="unavailable",
+        )
+
+    @model_validator(mode="after")
+    def consistent_dns(self) -> Self:
+        if self.hostname != self.query.hostname:
+            raise ValueError("DNS observation hostname and query disagree")
+        if self.query.status in ("success", "failure") and self.resolver.status != "available":
+            raise ValueError("measured DNS query requires available resolver configuration")
+        if (self.hostname is None) != (self.direct_ip_target is None):
+            raise ValueError("DNS hostname and direct-IP target must be configured together")
+        if self.baseline is not None and (
+            self.baseline.hostname != self.hostname
+            or self.baseline.direct_ip_target != self.direct_ip_target
+        ):
+            raise ValueError("DNS baseline scope mismatch")
+        if self.context_trimmed and "payload_budget" not in self.resolver.errors:
+            raise ValueError("trimmed DNS context requires visible payload-budget coverage")
+        if len(self.model_dump_json().encode("utf-8")) > 8192:
+            raise ValueError("DNS observation exceeds 8KiB")
+        return self
+
+
 class Sample(WireModel):
-    schema_version: Literal[1, 2, 3, 4, 5]
+    schema_version: Literal[1, 2, 3, 4, 5, 6]
     node_id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
     boot_id: UUID
     agent_session_id: UUID
@@ -731,6 +979,7 @@ class Sample(WireModel):
     memory: MemoryObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     fd: FdObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     network: NetworkObservation | None = Field(default=None, exclude_if=lambda value: value is None)
+    dns: DnsObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     delivery: Delivery | None = None
 
     @field_validator("observed_at")
@@ -743,7 +992,7 @@ class Sample(WireModel):
     @field_validator("units")
     @classmethod
     def exact_units(cls, value: dict[str, str]) -> dict[str, str]:
-        if value not in (UNITS, UNITS_V2, UNITS_V3, UNITS_V4, UNITS_V5):
+        if value not in (UNITS, UNITS_V2, UNITS_V3, UNITS_V4, UNITS_V5, UNITS_V6):
             raise ValueError("unsupported metric units")
         return value
 
@@ -755,6 +1004,7 @@ class Sample(WireModel):
             or self.memory is not None
             or self.fd is not None
             or self.network is not None
+            or self.dns is not None
         ):
             raise ValueError("schema v1 cannot contain CPU telemetry")
         if self.schema_version == 2 and (
@@ -763,6 +1013,7 @@ class Sample(WireModel):
             or self.memory is not None
             or self.fd is not None
             or self.network is not None
+            or self.dns is not None
         ):
             raise ValueError("schema v2 requires CPU telemetry and v2 units")
         if self.schema_version == 3 and (
@@ -771,6 +1022,7 @@ class Sample(WireModel):
             or self.memory is None
             or self.fd is not None
             or self.network is not None
+            or self.dns is not None
         ):
             raise ValueError("schema v3 requires CPU and memory telemetry and v3 units")
         if self.schema_version == 4 and (
@@ -779,6 +1031,7 @@ class Sample(WireModel):
             or self.memory is None
             or self.fd is None
             or self.network is not None
+            or self.dns is not None
         ):
             raise ValueError("schema v4 requires CPU, memory, FD telemetry and v4 units")
         if self.schema_version == 5 and (
@@ -787,9 +1040,21 @@ class Sample(WireModel):
             or self.memory is None
             or self.fd is None
             or self.network is None
+            or self.dns is not None
         ):
             raise ValueError(
                 "schema v5 requires CPU, memory, FD and network telemetry and v5 units"
+            )
+        if self.schema_version == 6 and (
+            self.units != UNITS_V6
+            or self.cpu is None
+            or self.memory is None
+            or self.fd is None
+            or self.network is None
+            or self.dns is None
+        ):
+            raise ValueError(
+                "schema v6 requires CPU, memory, FD, network and DNS telemetry and v6 units"
             )
         if self.fd is not None and any(
             item.identity.boot_id != self.boot_id

@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from fleetdoctor.collection import collect_filesystem
 from fleetdoctor.cpu import CpuCollector
+from fleetdoctor.dns import DnsCollector
 from fleetdoctor.fd import FdCollectionWorker, FdCollector, WatchIdentity
 from fleetdoctor.memory import MemoryCollector
 from fleetdoctor.network import (
@@ -28,6 +29,7 @@ from fleetdoctor.network import (
 )
 from fleetdoctor.schema import (
     CpuObservation,
+    DnsObservation,
     FdObservation,
     Filesystem,
     HostMemoryObservation,
@@ -48,6 +50,7 @@ class SupervisorResult:
     memory: MemoryObservation
     fd: FdObservation
     network: NetworkObservation
+    dns: DnsObservation | None
 
 
 def _stop(_signum: int, _frame: object) -> None:
@@ -90,6 +93,7 @@ def _supervisor_worker(conn: Connection) -> None:
     memory_collector = MemoryCollector()
     fd_collector = FdCollector()
     network_collector = NetworkCollector()
+    dns_collector = DnsCollector()
     identity = _proc_identity(os.getpid())
     _send_frame(
         conn,
@@ -114,10 +118,17 @@ def _supervisor_worker(conn: Connection) -> None:
                 executor.submit(memory_collector.collect, tuple(request["cgroups"])): "memory",
                 executor.submit(network_collector.collect, request["network_target"]): "network",
             }
+            if request["dns_hostname"] is not None:
+                futures[
+                    executor.submit(
+                        dns_collector.collect, request["dns_hostname"], request["network_target"]
+                    )
+                ] = "dns"
             completed: set[str] = set()
             fd_submitted = False
+            expected = 6 if request["dns_hostname"] is not None else 5
             try:
-                while len(completed) < 5:
+                while len(completed) < expected:
                     done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
                     for future in done:
                         result_kind = futures.pop(future)
@@ -304,6 +315,8 @@ class CollectionSupervisor(NetworkCollectionWorker):
             return FdObservation.model_validate(payload)
         if result_kind == "network":
             return NetworkObservation.model_validate(payload)
+        if result_kind == "dns":
+            return DnsObservation.model_validate(payload)
         raise ValueError("unknown result kind")
 
     @staticmethod
@@ -315,6 +328,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
         revision: int | None,
         watch_error: str | None,
         target: str | None,
+        dns_hostname: str | None,
         error: str,
     ) -> SupervisorResult:
         return SupervisorResult(
@@ -326,6 +340,9 @@ class CollectionSupervisor(NetworkCollectionWorker):
             ),
             FdCollectionWorker.unavailable(watches, configured, revision, watch_error, error),
             NetworkObservation.unavailable(target, error),
+            DnsObservation.unavailable(dns_hostname, target, error)
+            if dns_hostname is not None
+            else None,
         )
 
     def collect_all(
@@ -341,6 +358,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
         revision: int | None,
         watch_error: str | None,
         target: str | None,
+        dns_hostname: str | None = None,
         budget: float = 3.0,
     ) -> SupervisorResult:
         started = time.monotonic()
@@ -350,7 +368,15 @@ class CollectionSupervisor(NetworkCollectionWorker):
             if self.conn is None and self.process is not None:
                 self.close(deadline)
             return self._fallback(
-                paths, cgroups, watches, configured, revision, watch_error, target, error
+                paths,
+                cgroups,
+                watches,
+                configured,
+                revision,
+                watch_error,
+                target,
+                dns_hostname,
+                error,
             )
         token = {"boot": str(boot), "session": str(session), "sequence": sequence}
         results: dict[str, Any] = {}
@@ -371,6 +397,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
                     "watch_revision": revision,
                     "watch_error": watch_error,
                     "network_target": target,
+                    "dns_hostname": dns_hostname,
                 },
             )
             response_deadline = deadline - TEARDOWN_RESERVE
@@ -385,7 +412,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
                 elif (
                     not isinstance(result_kind, str)
                     or result_kind in results
-                    or result_kind not in {"filesystem", "cpu", "memory", "fd", "network"}
+                    or result_kind not in {"filesystem", "cpu", "memory", "fd", "network", "dns"}
                 ):
                     raise ValueError("collection_supervisor_duplicate_or_unknown_result")
                 elif kind == "result":
@@ -401,7 +428,10 @@ class CollectionSupervisor(NetworkCollectionWorker):
             results.clear()
         except (EOFError, OSError):
             pass
-        if not complete or set(results) != {"filesystem", "cpu", "memory", "fd", "network"}:
+        expected_results = {"filesystem", "cpu", "memory", "fd", "network"}
+        if dns_hostname is not None:
+            expected_results.add("dns")
+        if not complete or set(results) != expected_results:
             self.close(deadline)
         fallback = self._fallback(
             paths,
@@ -411,6 +441,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
             revision,
             watch_error,
             target,
+            dns_hostname,
             "collection_supervisor_timeout",
         )
         try:
@@ -431,6 +462,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
                     else "collection_supervisor_timeout",
                 ),
                 results.get("network") or fallback.network,
+                (results.get("dns") or fallback.dns) if dns_hostname is not None else None,
             )
         except (KeyError, TypeError, ValidationError):
             self.close()

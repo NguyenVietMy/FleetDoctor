@@ -31,6 +31,7 @@ install -m 0644 deploy/fleetdoctor-disk-prepare.service /etc/systemd/system/flee
 install -m 0755 deploy/memory_resource.py /usr/local/sbin/fleetdoctor-memory-resource
 install -m 0755 deploy/fd_resource.py /usr/local/sbin/fleetdoctor-fd-resource
 install -m 0755 deploy/network_resource.py /usr/local/sbin/fleetdoctor-network-resource
+install -m 0755 deploy/dns_resource.py /usr/local/sbin/fleetdoctor-dns-resource
 install -m 0755 deploy/network_prepare.sh /usr/local/sbin/fleetdoctor-network-prepare
 /usr/local/sbin/fleetdoctor-network-prepare fleetdoctor
 systemctl daemon-reload

@@ -6,7 +6,15 @@ from typing import Any
 from uuid import uuid4
 
 from fleetdoctor.fd import MAX_ACTIVE_WATCHES, parse_resource
-from fleetdoctor.incidents import CpuConfig, DiskConfig, FdConfig, Incident, InodeConfig, OomConfig
+from fleetdoctor.incidents import (
+    CpuConfig,
+    DiskConfig,
+    FdConfig,
+    Incident,
+    InodeConfig,
+    NetworkConfig,
+    OomConfig,
+)
 from fleetdoctor.schema import FdProcessObservation, Filesystem, Sample, WorkloadMemoryObservation
 
 
@@ -30,7 +38,9 @@ def evidence(sample: Sample, fs: Filesystem) -> dict[str, Any]:
 class Window:
     opening: int = 0
     recovery: int = 0
-    configuration: DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | None = None
+    configuration: (
+        DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig | None
+    ) = None
     guard_percent: float | None = None
     exit_confirmations: int = 0
     replacement_boot: str | None = None
@@ -748,6 +758,179 @@ class FdEvaluator:
         return changes
 
 
+MAX_ACTIVE_NETWORK_RESOURCES = 16
+
+
+def network_evidence(sample: Sample, *, target_changed: bool = False) -> dict[str, Any]:
+    network = sample.network
+    probe = network.probe if network is not None else None
+    if target_changed:
+        return {
+            "node_id": sample.node_id,
+            "boot_id": str(sample.boot_id),
+            "agent_session_id": str(sample.agent_session_id),
+            "sequence": sample.sequence,
+            "observed_at": sample.observed_at.isoformat(),
+            "network_available": False,
+            "probe": None,
+            "tcp": None,
+            "interfaces": [],
+            "coverage": {
+                "probe": "unavailable",
+                "limitation": "target_changed",
+                "host_counters": "not_attributed_to_target",
+                "interface_counters": "not_attributed_to_path_cause",
+            },
+        }
+    return {
+        "node_id": sample.node_id,
+        "boot_id": str(sample.boot_id),
+        "agent_session_id": str(sample.agent_session_id),
+        "sequence": sample.sequence,
+        "observed_at": sample.observed_at.isoformat(),
+        "network_available": bool(probe is not None and probe.status == "available"),
+        "probe": probe.model_dump(mode="json") if probe is not None else None,
+        "tcp": network.tcp.model_dump(mode="json") if network is not None else None,
+        "interfaces": [item.model_dump(mode="json") for item in network.interfaces]
+        if network is not None
+        else [],
+        "coverage": {
+            "probe": probe.status if probe is not None else "unavailable",
+            "route": probe.route_status if probe is not None else "unavailable",
+            "route_error": probe.route_error if probe is not None else "network_unavailable",
+            "host_counters": "context_only_not_target_attributed",
+            "interface_counters": "interface_scoped_context_not_causal",
+            "errors": network.errors if network is not None else ["network_unavailable"],
+        },
+    }
+
+
+class NetworkEvaluator:
+    def __init__(self, active: list[Incident]) -> None:
+        self.active = {(item.node_id, item.resource): item for item in active}
+        self.windows: dict[tuple[str, str], Window] = {}
+        self.reloaded = {item.id for item in active}
+        self.admission_overflow_nodes: set[str] = set()
+
+    def evaluate(
+        self, sample: Sample, previous: Sample | None, now: datetime, config: NetworkConfig
+    ) -> list[Incident]:
+        changes: list[Incident] = []
+        # Candidate overflow describes only the current accepted evaluation. Capacity
+        # itself is derived from durable active rows by the API/metrics view.
+        self.admission_overflow_nodes.discard(sample.node_id)
+        probe = sample.network.probe if sample.network is not None else None
+        target = probe.target if probe is not None else None
+        resource = f"ipv4:{target}" if target is not None else None
+        previous_target = (
+            previous.network.probe.target
+            if previous is not None and previous.network is not None
+            else None
+        )
+        for key, active_incident in list(self.active.items()):
+            if active_incident.node_id != sample.node_id or key[1] == resource:
+                continue
+            updated = active_incident.model_copy(deep=True)
+            updated.latest_evidence = network_evidence(sample, target_changed=True)
+            updated.observed_at = sample.observed_at
+            updated.evaluated_at = updated.updated_at = now
+            self.active[key] = updated
+            self.windows.pop(key, None)
+            self.reloaded.discard(updated.id)
+            changes.append(updated)
+        if resource is None:
+            return changes
+        key = sample.node_id, resource
+        incident = self.active.get(key)
+        measured = incident.configuration if incident is not None else config
+        assert isinstance(measured, NetworkConfig)
+        continuity = bool(
+            previous is not None
+            and previous.boot_id == sample.boot_id
+            and previous.agent_session_id == sample.agent_session_id
+            and (sample.observed_at - previous.observed_at).total_seconds()
+            <= measured.max_gap_seconds
+            and previous_target == target
+        )
+        for pending_key in list(self.windows):
+            if (
+                pending_key[0] == sample.node_id
+                and pending_key != key
+                and pending_key not in self.active
+            ):
+                self.windows.pop(pending_key)
+        window = self.windows.setdefault(key, Window())
+        if not continuity or window.configuration != measured:
+            window.opening = window.recovery = 0
+            window.configuration = measured
+        facts = network_evidence(sample)
+        available = probe is not None and probe.status == "available"
+        lost = probe.lost if probe is not None and available else None
+        median = probe.median_rtt_ms if probe is not None and available else None
+        opening = bool(
+            available
+            and (
+                (lost is not None and lost >= measured.loss_trigger_packets)
+                or (median is not None and median >= measured.rtt_trigger_ms)
+            )
+        )
+        recovery = bool(
+            available and lost == 0 and median is not None and median < measured.recovery_rtt_ms
+        )
+        if incident is not None:
+            window.opening = 0
+            window.recovery = window.recovery + 1 if recovery else 0
+            updated = incident.model_copy(deep=True)
+            updated.latest_evidence = facts
+            updated.observed_at = sample.observed_at
+            updated.evaluated_at = updated.updated_at = now
+            if window.recovery >= measured.consecutive_samples:
+                updated.status = "resolved"
+                updated.resolved_at = now
+                self.active.pop(key)
+                window.recovery = 0
+            else:
+                self.active[key] = updated
+            self.reloaded.discard(updated.id)
+            changes.append(updated)
+            return changes
+        window.recovery = 0
+        window.opening = window.opening + 1 if opening else 0
+        if window.opening < measured.consecutive_samples:
+            return changes
+        active_for_node = sum(node == sample.node_id for node, _ in self.active)
+        if active_for_node >= MAX_ACTIVE_NETWORK_RESOURCES:
+            self.admission_overflow_nodes.add(sample.node_id)
+            window.opening = 0
+            return changes
+        opened = Incident(
+            id=uuid4(),
+            node_id=sample.node_id,
+            resource=resource,
+            rule="network_path_degradation",
+            severity=measured.severity,
+            diagnosis=f"Network path to {target} has sustained packet loss or latency",
+            configuration=measured,
+            opening_evidence=facts,
+            latest_evidence=facts,
+            opened_at=now,
+            observed_at=sample.observed_at,
+            evaluated_at=now,
+            updated_at=now,
+            investigation_steps=[
+                f"Repeat a bounded numeric ping to {target} and compare individual successful RTTs",
+                "Inspect ip -4 route get for path context; do not treat the interface as a proven culprit",
+                "Compare host retransmits and interface error/drop counters using their recorded scopes",
+                "Check shaping and upstream path changes while preserving ingestion and administration traffic",
+                "Remove only an owned matching fault and require three fresh zero-loss observations below recovery RTT",
+            ],
+        )
+        self.active[key] = opened
+        window.opening = 0
+        changes.append(opened)
+        return changes
+
+
 class CompositeEvaluator:
     def __init__(self, active: list[Incident]) -> None:
         self.disk = DiskEvaluator([i for i in active if i.rule == "disk_block_exhaustion"])
@@ -755,6 +938,7 @@ class CompositeEvaluator:
         self.cpu = CpuEvaluator([i for i in active if i.rule == "cpu_saturation"])
         self.oom = OomEvaluator([i for i in active if i.rule == "workload_oom"])
         self.fd = FdEvaluator([i for i in active if i.rule == "fd_pressure"])
+        self.network = NetworkEvaluator([i for i in active if i.rule == "network_path_degradation"])
 
     @property
     def active(self) -> dict[tuple[str, str, str], Incident]:
@@ -766,6 +950,7 @@ class CompositeEvaluator:
                 *self.cpu.active.values(),
                 *self.oom.active.values(),
                 *self.fd.active.values(),
+                *self.network.active.values(),
             ]
         }
 
@@ -777,10 +962,11 @@ class CompositeEvaluator:
             | set(self.cpu.reloaded)
             | set(self.oom.reloaded)
             | set(self.fd.reloaded)
+            | set(self.network.reloaded)
         )
 
     def reset_node(self, node: str) -> None:
-        for evaluator in (self.disk, self.inode, self.cpu, self.oom, self.fd):
+        for evaluator in (self.disk, self.inode, self.cpu, self.oom, self.fd, self.network):
             for key in list(evaluator.windows):
                 if key[0] == node:
                     evaluator.windows.pop(key)
@@ -797,6 +983,9 @@ class CompositeEvaluator:
         }
         self.oom.active = {(i.node_id, i.resource): i for i in records if i.rule == "workload_oom"}
         self.fd.active = {(i.node_id, i.resource): i for i in records if i.rule == "fd_pressure"}
+        self.network.active = {
+            (i.node_id, i.resource): i for i in records if i.rule == "network_path_degradation"
+        }
         for node in affected:
             self.reset_node(node)
         self.disk.reloaded.update(
@@ -814,6 +1003,9 @@ class CompositeEvaluator:
         self.fd.reloaded.update(
             i.id for i in records if i.rule == "fd_pressure" and i.node_id in affected
         )
+        self.network.reloaded.update(
+            i.id for i in records if i.rule == "network_path_degradation" and i.node_id in affected
+        )
 
     def evaluate(
         self,
@@ -825,6 +1017,7 @@ class CompositeEvaluator:
         cpu_config: CpuConfig,
         oom_config: OomConfig,
         fd_config: FdConfig,
+        network_config: NetworkConfig | None = None,
     ) -> list[Incident]:
         return [
             *self.disk.evaluate(sample, previous, now, disk_config),
@@ -832,4 +1025,5 @@ class CompositeEvaluator:
             *self.cpu.evaluate(sample, previous, now, cpu_config),
             *self.oom.evaluate(sample, previous, now, oom_config),
             *self.fd.evaluate(sample, previous, now, fd_config),
+            *self.network.evaluate(sample, previous, now, network_config or NetworkConfig()),
         ]

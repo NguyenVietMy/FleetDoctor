@@ -1,5 +1,5 @@
 [Unit]
-Description=FleetDoctor host filesystem, CPU, and memory agent
+Description=FleetDoctor host filesystem, CPU, memory, FD, and network agent
 Wants=network-online.target
 After=network-online.target
 Requires=fleetdoctor-disk-prepare.service

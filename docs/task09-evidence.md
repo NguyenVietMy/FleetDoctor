@@ -1,0 +1,20 @@
+# Task09 evidence status
+
+Task09 implements schema-v5 direct-IPv4 network collection, sustained and durable network-path incidents, fixed history and bounded Prometheus surfaces, Fleet/Node Grafana panels, service preparation, a root-only ICMP netem helper, a measured two-profile harness, local proof commands, documentation and CI wiring.
+
+## Current builder handoff
+
+The final builder source remains based on `920e16f7d2b1f50cd73951897c355356a8e70e52` and the approved round-five plan at SHA-256 `0c8108a7ca193ef81efa060daec39f5953f8c4dc68a8cc1cee6d135179bba044`. The builder did not commit, publish, deploy, use AWS/SSH, or run remote CI.
+
+The retained local `publication-20261024/mode0644-python-attempt6.json` proof built the test image with `--no-cache` after a failed Docker storage cache was shown to contain a zero-byte preparation script. It matched the runtime image bytes to the host for the Dockerfile, Compose and Python lock/config files, the network preparation/helper/controller files, and the production network/supervisor modules. With the repository script still represented by Git as mode `100644`, direct execution failed with permission denied and exit 126, while `/bin/sh /app/deploy/network_prepare.sh fleetdoctor` succeeded in an isolated `--network none` namespace. The proof read back the actual local service GID range `10001 10001`, verified the root-owned mode-0644 sysctl file, observed no routes, changed no host sysctl or `tc` state, and proved exact owned container, volume, and image absence. GID 10001 is evidence for the disposable proof image only; installation continues to discover the real service GID.
+
+This focused proof closes only the checkout-mode preparation defect. Earlier native/service/Windows/Linux/Grafana evidence remains retained with its original source binding and is not relabelled as final proof for these later bytes. The coordinator must freeze this handoff and independently rerun the final static, Windows, Linux root/nonroot, service, native and Grafana gates. Fresh source inspection and CI completion also remain pending; AWS/SSH/deployment, the five-run AWS batch, healthy-hour/overhead calibration and owner acceptance remain unrun.
+
+Evidence remains separated by role and environment:
+
+- Builder fixture/static checks cover wire compatibility, true successful-reply median, partial/no-reply versus unavailable semantics, thresholds, freshness/order/identity, frozen configuration/gaps, target changes, bounded cache/admission, counter/gauge scopes and resets, worker cancellation/output/time bounds, helper authority, and harness cleanup/aggregation behavior.
+- The isolated service proof uses real PostgreSQL, Prometheus and Grafana services with synthetic v5 samples. It must observe nonempty matching Prometheus and history data, not only successful empty responses or HELP/TYPE metadata. It is not native ping/netem evidence.
+- The native proof uses the unmodified production agent with real collection and real ping/tc/netem in disposable Linux Docker namespaces. Its second agent is a separate namespace on the same Docker host, not a separate AWS host. Host `tc` is not modified.
+- Independent source inspection, coordinator frozen-source reruns, rendered Grafana query/render/visual inspection, remote CI, AWS/SSH/deployment, a five-run AWS batch, healthy-hour/overhead calibration, publication and owner acceptance remain unrun at builder handoff.
+
+Each retained attempt uses a unique external path and records source bytes, environment/measurement metadata, errors, and authoritative owned-resource cleanup. Five-run aggregation is implemented but only accepts five complete source/config/environment/topology-comparable attempts, permits the two target/reference orientations, lists faulted nodes, and requires each profile median to be strictly below 30 seconds. Slower complete runs remain in the batch and retain per-run flags; failed or incomplete runs do not count. Local proof is not substituted for the unrun AWS batch.

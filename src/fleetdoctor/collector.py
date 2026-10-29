@@ -33,9 +33,16 @@ from fleetdoctor.fd import (
     parse_resource,
 )
 from fleetdoctor.history import HISTORY_METRICS, HistoryClient, validate_range
-from fleetdoctor.incidents import CpuConfig, DiskConfig, FdConfig, InodeConfig, OomConfig
+from fleetdoctor.incidents import (
+    CpuConfig,
+    DiskConfig,
+    FdConfig,
+    InodeConfig,
+    NetworkConfig,
+    OomConfig,
+)
 from fleetdoctor.memory import validate_cgroup_paths
-from fleetdoctor.rules import CompositeEvaluator
+from fleetdoctor.rules import MAX_ACTIVE_NETWORK_RESOURCES, CompositeEvaluator
 from fleetdoctor.schema import FIELDS, Sample, WorkloadMemoryObservation
 from fleetdoctor.store import IncidentStore, PostgresStore, StoreError, StoreSnapshot
 
@@ -76,6 +83,7 @@ class State:
         cpu_config: CpuConfig | None = None,
         oom_config: OomConfig | None = None,
         fd_config: FdConfig | None = None,
+        network_config: NetworkConfig | None = None,
         cgroup_paths: tuple[str, ...] = (),
     ) -> None:
         self.nodes, self.paths, self.clock = nodes, paths, clock
@@ -94,6 +102,7 @@ class State:
             cpu_config or CpuConfig(),
         )
         self.oom_config, self.fd_config = oom_config or OomConfig(), fd_config or FdConfig()
+        self.network_config = network_config or NetworkConfig()
         self.cgroup_paths = cgroup_paths
         snapshot = store.snapshot(set(nodes))
         self.evaluator = CompositeEvaluator(snapshot.active)
@@ -176,6 +185,7 @@ class State:
                 self.cpu_config,
                 self.oom_config,
                 self.fd_config,
+                self.network_config,
             )
             retired = list(self.retired[sample.node_id])
             if previous and identity != prev_identity:
@@ -228,6 +238,7 @@ class State:
                         "cpu_saturation",
                         "workload_oom",
                         "fd_pressure",
+                        "network_path_degradation",
                     )
                 }
                 if active is not None
@@ -236,8 +247,14 @@ class State:
             cpu = sample.cpu if sample else None
             memory = sample.memory if sample else None
             fd = sample.fd if sample else None
+            network = sample.network if sample else None
             fd_active_count = (
                 sum(i.node_id == node and i.rule == "fd_pressure" for i in active)
+                if active is not None
+                else None
+            )
+            network_active_count = (
+                sum(i.node_id == node and i.rule == "network_path_degradation" for i in active)
                 if active is not None
                 else None
             )
@@ -362,8 +379,35 @@ class State:
                     if fresh and fd is not None
                     else ["observation_not_fresh" if sample else "observation_unavailable"],
                 },
+                "network_coverage": {
+                    "probe": network.probe.status
+                    if fresh and network is not None
+                    else "unavailable",
+                    "route": network.probe.route_status
+                    if fresh and network is not None
+                    else "unavailable",
+                    "route_error": network.probe.route_error
+                    if fresh and network is not None
+                    else "observation_not_fresh",
+                    "interface_context": network.interface_coverage
+                    if fresh and network is not None
+                    else "unavailable",
+                    "admission_capacity": (
+                        "unavailable"
+                        if network_active_count is None
+                        or network_active_count >= MAX_ACTIVE_NETWORK_RESOURCES
+                        else "available"
+                    ),
+                    "candidate_overflow": (node in self.evaluator.network.admission_overflow_nodes),
+                    "host_counter_scope": "host_not_target_or_interface_attributed",
+                    "interface_counter_scope": "interface_context_not_path_causation",
+                    "errors": network.errors
+                    if fresh and network is not None
+                    else ["observation_not_fresh" if sample else "observation_unavailable"],
+                },
                 "sample": sample.model_dump(
-                    mode="json", exclude=set() if fresh else {"filesystems", "cpu", "memory", "fd"}
+                    mode="json",
+                    exclude=set() if fresh else {"filesystems", "cpu", "memory", "fd", "network"},
                 )
                 if sample
                 else None,
@@ -373,6 +417,9 @@ class State:
                 "cpu": cpu.model_dump(mode="json") if cpu is not None and fresh else None,
                 "memory": memory.model_dump(mode="json") if memory is not None and fresh else None,
                 "fd": fd.model_dump(mode="json") if fd is not None and fresh else None,
+                "network": network.model_dump(mode="json")
+                if network is not None and fresh
+                else None,
             }
 
     def fd_watch(self, node: str) -> WatchResponse:
@@ -421,6 +468,7 @@ def create_app(
     cpu_config: CpuConfig | None = None,
     oom_config: OomConfig | None = None,
     fd_config: FdConfig | None = None,
+    network_config: NetworkConfig | None = None,
     cgroup_paths: tuple[str, ...] = (),
 ) -> FastAPI:
     if not nodes or len(nodes) > 16 or any(len(v.get_secret_value()) < 32 for v in nodes.values()):
@@ -439,6 +487,7 @@ def create_app(
         cpu_config or CpuConfig(),
         oom_config or OomConfig(),
         fd_config or FdConfig(),
+        network_config or NetworkConfig(),
         cgroup_paths,
     )
     app = FastAPI(title="FleetDoctor", version="0.1.0")
@@ -472,6 +521,7 @@ def create_app(
             "cpu_rule": state.cpu_config.model_dump(),
             "oom_rule": state.oom_config.model_dump(),
             "fd_rule": state.fd_config.model_dump(),
+            "network_rule": state.network_config.model_dump(),
             "filesystems": list(paths),
             "cgroups": list(cgroup_paths),
             "cadence_seconds": 5,
@@ -490,7 +540,7 @@ def create_app(
             "status": "ok",
             "storage": "incidents_and_ingestion_checkpoints_durable",
             "sample_history": "not_persisted",
-            "slice": "08",
+            "slice": "09",
         }
 
     @app.get("/nodes/{node}/fd-watch")
@@ -877,6 +927,95 @@ def create_app(
             ["node"],
             registry=registry,
         )
+        network_probe_coverage_g = Gauge(
+            "fleetdoctor_network_probe_coverage_ratio",
+            "Fresh measured three-packet probe is available",
+            ["node"],
+            registry=registry,
+        )
+        network_route_coverage_g = Gauge(
+            "fleetdoctor_network_route_attribution_available",
+            "Stable outgoing interface context is available",
+            ["node"],
+            registry=registry,
+        )
+        network_admission_g = Gauge(
+            "fleetdoctor_network_admission_capacity_available",
+            "Network incident admission capacity is available",
+            ["node"],
+            registry=registry,
+        )
+        network_overflow_g = Gauge(
+            "fleetdoctor_network_admission_candidate_overflow",
+            "A qualifying network candidate was rejected by the active incident cap",
+            ["node"],
+            registry=registry,
+        )
+        network_probe_gauges = {
+            "loss_ratio": Gauge(
+                "fleetdoctor_network_probe_loss_ratio",
+                "Measured loss fraction from the current three-packet probe",
+                ["node"],
+                registry=registry,
+            ),
+            "lost": Gauge(
+                "fleetdoctor_network_probe_loss_packets",
+                "Measured lost packets from the current three-packet probe",
+                ["node"],
+                registry=registry,
+            ),
+            "median_rtt_ms": Gauge(
+                "fleetdoctor_network_probe_median_rtt_seconds",
+                "Median RTT of successful replies; absent when no reply",
+                ["node"],
+                registry=registry,
+            ),
+        }
+        network_tcp_gauges = {
+            "retrans_segs": Gauge(
+                "fleetdoctor_network_tcp_retransmits_total",
+                "Host-wide cumulative TCP retransmitted segments",
+                ["node"],
+                registry=registry,
+            ),
+            "retrans_per_second": Gauge(
+                "fleetdoctor_network_tcp_retransmits_per_second",
+                "Host-wide TCP retransmitted segments per second",
+                ["node"],
+                registry=registry,
+            ),
+            "curr_estab": Gauge(
+                "fleetdoctor_network_tcp_curr_estab",
+                "Instantaneous host TCP established connection count",
+                ["node"],
+                registry=registry,
+            ),
+        }
+        network_tcp_states_g = Gauge(
+            "fleetdoctor_network_tcp_state_connections",
+            "Instantaneous bounded host TCP connection inventory",
+            ["node", "state"],
+            registry=registry,
+        )
+        interface_fields = ("rx_errors", "rx_dropped", "tx_errors", "tx_dropped")
+        network_interface_totals = {
+            field: Gauge(
+                f"fleetdoctor_network_interface_{field}_total",
+                f"Interface-scoped cumulative {field.replace('_', ' ')}",
+                ["node", "interface"],
+                registry=registry,
+            )
+            for field in interface_fields
+        }
+        network_interface_rates = {
+            field: Gauge(
+                f"fleetdoctor_network_interface_{field}_per_second",
+                f"Interface-scoped {field.replace('_', ' ')} per second",
+                ["node", "interface"],
+                registry=registry,
+            )
+            for field in interface_fields
+        }
         try:
             views = {node: state.view(node, include_counts=storage_ok) for node in nodes}
         except StoreError:
@@ -972,6 +1111,40 @@ def create_app(
                     fd_limit_g.labels(node).set(highest["soft_limit"])
                     if highest["growth_per_second"] is not None:
                         fd_growth_g.labels(node).set(highest["growth_per_second"])
+            network_coverage = view["network_coverage"]
+            network_probe_coverage_g.labels(node).set(
+                int(view["fresh"] and network_coverage["probe"] == "available")
+            )
+            network_route_coverage_g.labels(node).set(
+                int(view["fresh"] and network_coverage["route"] == "available")
+            )
+            network_admission_g.labels(node).set(
+                int(network_coverage["admission_capacity"] == "available")
+            )
+            network_overflow_g.labels(node).set(int(network_coverage["candidate_overflow"]))
+            network = view["network"]
+            if network is not None:
+                probe = network["probe"]
+                if probe["status"] == "available":
+                    for field in ("loss_ratio", "lost"):
+                        network_probe_gauges[field].labels(node).set(probe[field])
+                    if probe["median_rtt_ms"] is not None:
+                        network_probe_gauges["median_rtt_ms"].labels(node).set(
+                            probe["median_rtt_ms"] / 1000
+                        )
+                tcp = network["tcp"]
+                for field, gauge in network_tcp_gauges.items():
+                    if tcp[field] is not None:
+                        gauge.labels(node).set(tcp[field])
+                for state_name, count in tcp["state_counts"].items():
+                    network_tcp_states_g.labels(node, state_name).set(count)
+                for interface in network["interfaces"]:
+                    name = interface["name"]
+                    for field in interface_fields:
+                        network_interface_totals[field].labels(node, name).set(interface[field])
+                        rate = interface[field + "_per_second"]
+                        if rate is not None:
+                            network_interface_rates[field].labels(node, name).set(rate)
         return Response(
             generate_latest(registry), media_type="text/plain; version=0.0.4; charset=utf-8"
         )
@@ -989,5 +1162,8 @@ def app_factory() -> FastAPI:
         cpu_config=CpuConfig.model_validate_json(os.getenv("FLEETDOCTOR_CPU_RULE", "{}")),
         oom_config=OomConfig.model_validate_json(os.getenv("FLEETDOCTOR_OOM_RULE", "{}")),
         fd_config=FdConfig.model_validate_json(os.getenv("FLEETDOCTOR_FD_RULE", "{}")),
+        network_config=NetworkConfig.model_validate_json(
+            os.getenv("FLEETDOCTOR_NETWORK_RULE", "{}")
+        ),
         cgroup_paths=validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", "")),
     )

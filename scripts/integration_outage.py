@@ -9,6 +9,7 @@ import hashlib
 import json
 import socket
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
@@ -55,6 +56,99 @@ class SyntheticWorker(CollectionWorker):
         pass
 
 
+def recovery_response_cut(
+    current: dict[str, Any],
+    opening: dict[str, Any],
+    attempts: list[dict[str, Any]],
+    ticks: list[dict[str, Any]],
+    restored: float,
+) -> dict[str, Any]:
+    """Bind recovery counts to the exact evidence returned by one detail response."""
+    configuration = opening["configuration"]
+    threshold = float(configuration["recovery_percent"])
+    required = int(configuration["consecutive_samples"])
+    opening_evidence = opening["opening_evidence"]
+    latest = current["latest_evidence"]
+    boot_id = str(opening_evidence["boot_id"])
+    session_id = str(opening_evidence["agent_session_id"])
+    if latest.get("boot_id") != boot_id or latest.get("agent_session_id") != session_id:
+        raise AssertionError("recovery detail changed producer identity")
+    latest_sequence = int(latest["sequence"])
+    healthy_ticks = {
+        int(tick["sequence"])
+        for tick in ticks
+        if tick["monotonic"] > restored and float(tick["usage"]) < threshold
+    }
+    matching_attempts = [
+        row
+        for row in attempts
+        if row.get("boot_id") == boot_id
+        and row.get("agent_session_id") == session_id
+        and row.get("sequence") in healthy_ticks
+    ]
+    committed = {
+        int(row["sequence"])
+        for row in matching_attempts
+        if row.get("status") == "accepted" and int(row["sequence"]) <= latest_sequence
+    }
+    latest_filesystem = latest.get("filesystem") or {}
+    latest_is_healthy = (
+        latest_sequence in healthy_ticks
+        and latest.get("block_available") is True
+        and latest_filesystem.get("mountpoint") == PATH
+        and float(latest_filesystem.get("block_usage_percent", threshold)) < threshold
+    )
+    response_proven_sequence: int | None = None
+    if latest_is_healthy and any(
+        int(row["sequence"]) == latest_sequence for row in matching_attempts
+    ):
+        # The returned evidence is a commit boundary even if the proxy coroutine has
+        # not resumed to annotate that same POST response as accepted yet.
+        committed.add(latest_sequence)
+        response_proven_sequence = latest_sequence
+    committed_sequences = sorted(committed)
+    return {
+        "returned_status": current.get("status"),
+        "latest_identity": {
+            "boot_id": latest.get("boot_id"),
+            "agent_session_id": latest.get("agent_session_id"),
+            "sequence": latest_sequence,
+        },
+        "healthy_tick_sequences": sorted(healthy_ticks),
+        "accepted_at_response_sequences": sorted(
+            {
+                int(row["sequence"])
+                for row in matching_attempts
+                if row.get("status") == "accepted" and int(row["sequence"]) <= latest_sequence
+            }
+        ),
+        "response_proven_sequence": response_proven_sequence,
+        "eligible_committed_sequences": committed_sequences,
+        "eligible_committed_count": len(committed_sequences),
+        "required_count": required,
+        "expected_status": "resolved" if len(committed_sequences) >= required else "active",
+    }
+
+
+async def observe_recovery_response_cut(
+    detail_request: Callable[[], Awaitable[dict[str, Any]]],
+    opening: dict[str, Any],
+    attempts: list[dict[str, Any]],
+    ticks: list[dict[str, Any]],
+    restored: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Take the count only after the awaited response fixes its evidence boundary."""
+    current = await detail_request()
+    return current, recovery_response_cut(current, opening, attempts, ticks, restored)
+
+
+def assert_recovery_response_cut(current: dict[str, Any], cut: dict[str, Any]) -> None:
+    if current.get("status") != cut["expected_status"]:
+        raise AssertionError(
+            "recovery response/count cut mismatch: " + json.dumps(cut, sort_keys=True)
+        )
+
+
 async def prove_outage(
     api: str, prom: str, grafana: str, values: dict[str, str], proof: dict[str, Any]
 ) -> None:
@@ -80,6 +174,8 @@ async def prove_outage(
             assert value["node_id"] == "node-a"
             row = {
                 "body_sha256": hashlib.sha256(body).hexdigest(),
+                "boot_id": value["boot_id"],
+                "agent_session_id": value["agent_session_id"],
                 "sequence": value["sequence"],
                 "observed_at": value["observed_at"],
                 "discard_total": value["delivery"]["discard_total"],
@@ -255,37 +351,20 @@ async def prove_outage(
                     assert result.json()["status"] == "ineligible"
                 workers["node-a"].usage = 10
                 healthy_seen = 0
+                proof["recovery_response_trace"] = []
                 while healthy_seen < 3:
                     await asyncio.sleep(0.2)
-                    healthy_seqs = {
-                        tick["sequence"]
-                        for tick in workers["node-a"].ticks
-                        if tick["usage"] == 10 and tick["monotonic"] > restored
-                    }
-                    healthy_seen = len(
-                        {
-                            row["sequence"]
-                            for row in attempts
-                            if row.get("status") == "accepted" and row["sequence"] in healthy_seqs
-                        }
+                    current, cut = await observe_recovery_response_cut(
+                        lambda: get("/diagnoses/" + incident["id"]),
+                        incident,
+                        attempts,
+                        workers["node-a"].ticks,
+                        restored,
                     )
-                    current = await get("/diagnoses/" + incident["id"])
+                    proof["recovery_response_trace"].append(cut)
+                    healthy_seen = int(cut["eligible_committed_count"])
                     assert current["opening_evidence"] == incident["opening_evidence"]
-                    expected = "resolved" if healthy_seen >= 3 else "active"
-                    if current["status"] != expected:
-                        # The upstream ingest commit can become visible just before the proxy
-                        # resumes to annotate that same response as accepted. Permit only that
-                        # measured handoff; the next poll must still count all three responses.
-                        inflight_healthy = {
-                            row["sequence"]
-                            for row in attempts
-                            if row.get("http_status") is None and row["sequence"] in healthy_seqs
-                        }
-                        assert (
-                            current["status"] == "resolved"
-                            and healthy_seen < 3
-                            and healthy_seen + len(inflight_healthy) >= 3
-                        )
+                    assert_recovery_response_cut(current, cut)
                     if time.monotonic() - restored > 25:
                         raise TimeoutError("three fresh recovery observations deadline")
                 proof["resolved"] = current

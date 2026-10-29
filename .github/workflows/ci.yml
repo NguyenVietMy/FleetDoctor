@@ -1,9 +1,9 @@
-name: Task 01 through 08 checks
+name: Task 01 through 09 checks
 on: [push, pull_request]
 jobs:
   filesystem-and-services:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -14,12 +14,15 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy src tests scripts
       - run: uv run pytest
+      - run: git diff --check
       - name: Run Linux root fixture suite
         run: |
-          tag="fleetdoctor-task08-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
+          tag="fleetdoctor-task09-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
           trap 'docker image rm --force "$tag" >/dev/null 2>&1 || true' EXIT
           docker build --target test --tag "$tag" .
           docker run --rm "$tag"
+          docker run --rm --user 10001:10001 "$tag" \
+            /app/.venv/bin/python -m pytest -q
       - run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector'
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -27,10 +30,11 @@ jobs:
       - run: terraform -chdir=infra/aws fmt -check
       - run: terraform -chdir=infra/aws init -backend=false -lockfile=readonly
       - run: terraform -chdir=infra/aws validate
-      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task08-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task09-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/disk_helper_integration.py --output $RUNNER_TEMP/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/inode_helper_integration.py --output $RUNNER_TEMP/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/fd_helper_integration.py --output $RUNNER_TEMP/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - run: uv run python scripts/network_helper_integration.py --output $RUNNER_TEMP/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/cpu_smoke.py --workers 2 --seconds 2 --output $RUNNER_TEMP/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
       - name: Prepare accessible native OOM runtime
         run: |
@@ -61,15 +65,27 @@ jobs:
             [[ "$native_root" == /tmp/fleetdoctor-oom-ci.* && "$(dirname -- "$native_root")" == /tmp ]]
             sudo rm -rf -- "$native_root"
           fi
+      - name: Package protected network helper evidence
+        if: always()
+        run: |
+          proof_dir="$RUNNER_TEMP/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state"
+          proof_archive="$RUNNER_TEMP/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.tar.gz"
+          if sudo test -d "$proof_dir"; then
+            sudo tar -C "$proof_dir" -czf "$proof_archive" -- .
+            sudo chown "$(id -u):$(id -g)" "$proof_archive"
+            chmod 0600 "$proof_archive"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: task08-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: task09-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/task08-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task09-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.tar.gz
             ${{ runner.temp }}/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task06-oom-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task06-oom-helper-${{ github.run_id }}-${{ github.run_attempt }}.json

@@ -1,6 +1,8 @@
 # Filesystem samples and freshness
 
-The host agent uses `os.statvfs` for each configured absolute path, default `/`. These fields are Linux `statvfs` counters, not a `/proc` text parser. Fixture data in `tests/fixtures/statvfs.json` is explicitly synthetic and includes reserved blocks, zero capacity and malformed counters. Kernel OOM/process/network collectors are later slices.
+Schema v5 preserves the explicit v1-v4 wire contracts and adds bounded network observations. Network probe loss is available only for a valid three-echo measurement; no reply is measured `3/3` loss with RTT absent, while unavailable collection exports coverage without false loss or RTT. Successful RTT is a true median of reply lines. TCP retransmits and interface error/drop fields are cumulative counters with per-second rates. TCP `CurrEstab` and state inventory are instantaneous gauges and have no rates. Host counters are never attributed to the target or interface; interface counters are path context, not causation. See [network degradation](network-degradation.md).
+
+The host agent uses `os.statvfs` for each configured absolute path, default `/`. These fields are Linux `statvfs` counters, not a `/proc` text parser. Fixture data in `tests/fixtures/statvfs.json` is explicitly synthetic and includes reserved blocks, zero capacity and malformed counters.
 
 | Sample field | Meaning and unit |
 | --- | --- |
@@ -25,6 +27,8 @@ Pressure is `descriptor_count / current_soft_limit` and is not clamped. Growth e
 Three eligible readings at or above the configured 90% open threshold create an exact-identity warning. Three readings strictly below the frozen 80% recovery threshold resolve by release. Three direct exact-exit/replacement observations or three stable new-boot confirmations have separate reasons. Active identities are returned through the authenticated node watch response so they remain directly probed when they leave top lists. Watch refresh has a one-second outer elapsed deadline; failures retain the previous valid cache and a valid empty response clears it.
 
 Prometheus exports bounded node aggregates only: `fleetdoctor_fd_pressure_ratio`, `fleetdoctor_fd_count`, `fleetdoctor_fd_soft_limit`, `fleetdoctor_fd_growth_per_second`, `fleetdoctor_fd_coverage_ratio`, admission availability, and current candidate-overflow rejection. PID, command, boot and start time are not metric labels. A missing current maximum is absent rather than a healthy zero; read freshness and coverage with range history. Exact identity, count, actual limit, signed count delta/rate/interval, source errors, lifecycle reason, and investigation steps remain API/SQL incident evidence.
+
+Network admission exports `fleetdoctor_network_admission_capacity_available`, derived from the durable per-node active network-incident count, and `fleetdoctor_network_admission_candidate_overflow`, which is one only when the latest accepted evaluation rejected a qualifying candidate at the 16-resource cap. Candidate overflow is cleared by the next accepted evaluation; it is not a synonym for exhausted capacity.
 
 ## Inode diagnosis semantics
 

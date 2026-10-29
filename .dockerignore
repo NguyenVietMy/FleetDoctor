@@ -5,6 +5,11 @@
 .venv
 .env*
 infra
+!infra/
+infra/*
+!infra/aws/
+infra/aws/*
+!infra/aws/node-bootstrap.sh
 evidence
 dist
 __pycache__

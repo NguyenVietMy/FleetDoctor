@@ -32,6 +32,7 @@ from fleetdoctor.fd import (
 )
 from fleetdoctor.incidents import FdConfig, Incident
 from fleetdoctor.schema import (
+    UNITS_V5,
     CpuObservation,
     Delivery,
     FdObservation,
@@ -40,9 +41,12 @@ from fleetdoctor.schema import (
     Filesystem,
     HostMemoryObservation,
     MemoryObservation,
+    NetworkObservation,
+    NetworkProbeObservation,
     ProcessIdentity,
     ProcessObservation,
     Sample,
+    TcpNetworkObservation,
 )
 from fleetdoctor.store import FixtureStore
 
@@ -851,6 +855,52 @@ def test_combined_payload_fallback_preserves_watched_statuses() -> None:
     enveloped = bounded.model_copy(update={"delivery": Delivery(discard_total=delivery.MAX_TOTAL)})
     assert len(enveloped.model_dump_json().encode()) <= delivery.MAX_BODY
     assert len(bounded.fd.observations) == 32  # type: ignore[union-attr]
+
+
+def test_v5_payload_compaction_bounds_marker_and_round_trips_saturated_errors() -> None:
+    base = combined_payload_sample(["m" * 1200] * 16)
+    network = NetworkObservation(
+        probe=NetworkProbeObservation(
+            status="available",
+            target="192.0.2.10",
+            sent=3,
+            received=3,
+            lost=0,
+            loss_ratio=0,
+            successful_sequences=[1, 2, 3],
+            successful_rtts_ms=[1.0, 2.0, 3.0],
+            median_rtt_ms=2.0,
+            route_error="fixture_unknown_route",
+        ),
+        tcp=TcpNetworkObservation(
+            retrans_segs=1,
+            rate_status="baseline",
+            curr_estab=1,
+            state_counts={"established": 1},
+            state_inventory="complete",
+        ),
+        interface_coverage="complete",
+        elapsed_seconds=0.1,
+        errors=[f"network_error_{index}" for index in range(8)],
+    )
+    raw = base.model_dump(mode="json")
+    raw.update(schema_version=5, units=UNITS_V5, network=network.model_dump(mode="json"))
+    value = Sample.model_validate(raw)
+    assert len(value.model_dump_json().encode()) > delivery.MAX_BODY
+
+    bounded = payload_bounded_sample(value)
+    assert bounded.network is not None
+    assert bounded.network.context_trimmed
+    assert bounded.network.errors[-1] == "payload_budget"
+    assert len(bounded.network.errors) == 8
+    assert bounded.network.probe == network.probe
+    envelope = bounded.model_copy(update={"delivery": Delivery(discard_total=delivery.MAX_TOTAL)})
+    body = envelope.model_dump_json().encode()
+    assert len(body) <= delivery.MAX_BODY
+    decoded = Sample.model_validate_json(body)
+    assert decoded.network is not None
+    assert decoded.network.probe == network.probe
+    assert decoded.network.errors[-1] == "payload_budget"
 
 
 def test_delivery_envelope_boundary_compacts_fd_context_before_queueing() -> None:

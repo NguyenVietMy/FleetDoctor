@@ -37,6 +37,15 @@ HISTORY_METRICS = {
     "fd_soft_limit": "fleetdoctor_fd_soft_limit",
     "fd_growth_per_second": "fleetdoctor_fd_growth_per_second",
     "fd_coverage_ratio": "fleetdoctor_fd_coverage_ratio",
+    "network_loss_ratio": "fleetdoctor_network_probe_loss_ratio",
+    "network_loss_packets": "fleetdoctor_network_probe_loss_packets",
+    "network_rtt_seconds": "fleetdoctor_network_probe_median_rtt_seconds",
+    "network_probe_coverage_ratio": "fleetdoctor_network_probe_coverage_ratio",
+    "network_tcp_retransmits_total": "fleetdoctor_network_tcp_retransmits_total",
+    "network_tcp_retransmits_per_second": "fleetdoctor_network_tcp_retransmits_per_second",
+    "network_tcp_curr_estab": "fleetdoctor_network_tcp_curr_estab",
+    "network_interface_rx_errors_total": "fleetdoctor_network_interface_rx_errors_total",
+    "network_interface_rx_errors_per_second": "fleetdoctor_network_interface_rx_errors_per_second",
 }
 
 

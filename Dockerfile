@@ -1,11 +1,12 @@
 FROM ghcr.io/astral-sh/uv:0.11.4 AS uv
 FROM python:3.12-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 iputils-ping procps && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY src ./src
 RUN uv sync --locked --extra collector --no-dev
-RUN useradd --uid 10001 --create-home fleetdoctor
+RUN groupadd --gid 10001 fleetdoctor && useradd --uid 10001 --gid 10001 --create-home fleetdoctor
 USER fleetdoctor
 EXPOSE 8000
 CMD ["/app/.venv/bin/uvicorn", "fleetdoctor.collector:app_factory", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-proxy-headers", "--no-access-log"]
@@ -15,6 +16,7 @@ USER root
 COPY tests ./tests
 COPY scripts ./scripts
 COPY deploy ./deploy
+COPY infra ./infra
 COPY monitoring ./monitoring
 COPY compose.yaml Dockerfile ./
 RUN uv sync --locked --all-extras

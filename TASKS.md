@@ -1,6 +1,6 @@
 # FleetDoctor tasks
 
-Task09 is implemented for builder-local verification. [Task09 evidence](docs/task09-evidence.md) keeps fixture, isolated-service, native network-namespace, independent inspection, rendered-dashboard, CI, and AWS gates distinct.
+Task10 is implemented for builder-local verification. [Task10 evidence](docs/task10-evidence.md) keeps fixture, isolated-service, native resolver/helper, independent inspection, rendered-dashboard, CI, AWS, and owner-acceptance gates distinct. Ticket09's two accepted medium defects remain inherited and are not repaired by Ticket10.
 
 Approved breakdown: 19 slices. Ticket numbers below are sequential; the discussion column preserves the original numbers, including split slices 3A/3B and validations 13A–13F.
 
@@ -17,6 +17,7 @@ The [PRD](<FleetDoctor PRD.md>) owns requirements, thresholds, windows, and meas
 | 07 | 6 | [Inode exhaustion](.scratch/fleetdoctor/issues/07-inode-exhaustion.md) | 02 |
 | 08 | 7 | [FD pressure](.scratch/fleetdoctor/issues/08-fd-pressure.md) | 02 |
 | 09 | 8 | [Network degradation](.scratch/fleetdoctor/issues/09-network-degradation.md) | 02 |
+| 10 | 9 | [DNS failure](.scratch/fleetdoctor/issues/10-dns-failure.md) | 09 |
 | 10 | 9 | [DNS failure](.scratch/fleetdoctor/issues/10-dns-failure.md) | 09 |
 | 11 | 10 | [I/O bottleneck](.scratch/fleetdoctor/issues/11-io-bottleneck.md) | 02 |
 | 12 | 11 | [Postmortem drafting](.scratch/fleetdoctor/issues/12-postmortem-drafting.md) | 02 |

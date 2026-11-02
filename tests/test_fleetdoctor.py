@@ -305,7 +305,9 @@ def test_slow_worker_startup_eventually_collects() -> None:
         assert value.total_bytes is None and value.errors == ["collection_worker_starting"]
         assert worker.process is not None
         pid = worker.process.pid
-        assert worker.wait_ready(5)
+        # Spawn/import startup is not the collection deadline under test and is
+        # materially slower for an unprivileged container user on loaded hosts.
+        assert worker.wait_ready(15)
         assert worker.collect(("/",))[0].available_bytes == 1433600
         assert worker.process is not None and worker.process.pid == pid
     finally:
@@ -315,14 +317,14 @@ def test_slow_worker_startup_eventually_collects() -> None:
 def test_hung_collection_deadline_and_recovery() -> None:
     worker = CollectionWorker(target=hanging_worker)
     try:
-        assert worker.wait_ready(5)
+        assert worker.wait_ready(15)
         before = time.monotonic()
         value = worker.collect(("/",), budget=0.05)[0]
         assert value.total_bytes is None and value.errors == ["collection_timeout"]
         assert time.monotonic() - before < 0.5
         assert worker.process is None
         worker.target = delayed_worker
-        assert worker.wait_ready(5)
+        assert worker.wait_ready(15)
         assert worker.collect(("/",))[0].available_bytes == 1433600
     finally:
         worker.close()

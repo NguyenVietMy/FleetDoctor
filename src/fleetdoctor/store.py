@@ -135,11 +135,38 @@ class FixtureStore:
 DDL = f"""
 CREATE TABLE IF NOT EXISTS incidents (
     id uuid PRIMARY KEY, node_id text NOT NULL, resource text NOT NULL,
-    rule text NOT NULL, status text NOT NULL CHECK (status IN ('active','resolved')),
+    rule text NOT NULL,
+    status text NOT NULL CONSTRAINT incident_status_valid
+        CHECK (status IN ('active','resolved','superseded')),
     severity text NOT NULL, opened_at timestamptz NOT NULL, observed_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL, resolved_at timestamptz, record jsonb NOT NULL
 );
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS evidence_reloaded boolean NOT NULL DEFAULT false;
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname='incidents_status_check'
+          AND conrelid='incidents'::regclass
+    ) THEN
+        ALTER TABLE incidents DROP CONSTRAINT incidents_status_check;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname='incident_status_valid'
+          AND conrelid='incidents'::regclass
+          AND pg_get_constraintdef(oid) NOT LIKE '%superseded%'
+    ) THEN
+        ALTER TABLE incidents DROP CONSTRAINT incident_status_valid;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname='incident_status_valid'
+          AND conrelid='incidents'::regclass
+    ) THEN
+        ALTER TABLE incidents ADD CONSTRAINT incident_status_valid
+            CHECK (status IN ('active','resolved','superseded'));
+    END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS incident_one_active ON incidents(node_id,rule,resource)
     WHERE status='active';
 CREATE INDEX IF NOT EXISTS incident_opened ON incidents(opened_at DESC,id DESC);

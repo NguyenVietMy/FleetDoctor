@@ -18,6 +18,7 @@ from fleetdoctor.collection import collect_filesystem
 from fleetdoctor.cpu import CpuCollector
 from fleetdoctor.dns import DnsCollector
 from fleetdoctor.fd import FdCollectionWorker, FdCollector, WatchIdentity
+from fleetdoctor.io import IoCollector
 from fleetdoctor.memory import MemoryCollector
 from fleetdoctor.network import (
     NetworkCollectionWorker,
@@ -33,6 +34,7 @@ from fleetdoctor.schema import (
     FdObservation,
     Filesystem,
     HostMemoryObservation,
+    IoObservation,
     MemoryObservation,
     NetworkObservation,
 )
@@ -51,6 +53,7 @@ class SupervisorResult:
     fd: FdObservation
     network: NetworkObservation
     dns: DnsObservation | None
+    io: IoObservation
 
 
 def _stop(_signum: int, _frame: object) -> None:
@@ -94,6 +97,7 @@ def _supervisor_worker(conn: Connection) -> None:
     fd_collector = FdCollector()
     network_collector = NetworkCollector()
     dns_collector = DnsCollector()
+    io_collector = IoCollector()
     identity = _proc_identity(os.getpid())
     _send_frame(
         conn,
@@ -117,6 +121,12 @@ def _supervisor_worker(conn: Connection) -> None:
                 executor.submit(cpu_collector.collect, tuple(request["configured_pids"])): "cpu",
                 executor.submit(memory_collector.collect, tuple(request["cgroups"])): "memory",
                 executor.submit(network_collector.collect, request["network_target"]): "network",
+                executor.submit(
+                    io_collector.collect,
+                    tuple(request["io_mounts"]),
+                    tuple(request["io_pids"]),
+                    tuple(request["cgroups"]),
+                ): "io",
             }
             if request["dns_hostname"] is not None:
                 futures[
@@ -126,7 +136,7 @@ def _supervisor_worker(conn: Connection) -> None:
                 ] = "dns"
             completed: set[str] = set()
             fd_submitted = False
-            expected = 6 if request["dns_hostname"] is not None else 5
+            expected = 7 if request["dns_hostname"] is not None else 6
             try:
                 while len(completed) < expected:
                     done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
@@ -317,6 +327,8 @@ class CollectionSupervisor(NetworkCollectionWorker):
             return NetworkObservation.model_validate(payload)
         if result_kind == "dns":
             return DnsObservation.model_validate(payload)
+        if result_kind == "io":
+            return IoObservation.model_validate(payload)
         raise ValueError("unknown result kind")
 
     @staticmethod
@@ -329,6 +341,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
         watch_error: str | None,
         target: str | None,
         dns_hostname: str | None,
+        io_mounts: tuple[str, ...],
         error: str,
     ) -> SupervisorResult:
         return SupervisorResult(
@@ -343,6 +356,13 @@ class CollectionSupervisor(NetworkCollectionWorker):
             DnsObservation.unavailable(dns_hostname, target, error)
             if dns_hostname is not None
             else None,
+            IoObservation(
+                status="unavailable" if io_mounts else "disabled",
+                inventory_complete=not io_mounts,
+                configured_scopes=list(io_mounts),
+                mapping_errors={mount: error for mount in io_mounts},
+                errors=[error] if io_mounts else [],
+            ),
         )
 
     def collect_all(
@@ -359,6 +379,8 @@ class CollectionSupervisor(NetworkCollectionWorker):
         watch_error: str | None,
         target: str | None,
         dns_hostname: str | None = None,
+        io_mounts: tuple[str, ...] = (),
+        io_pids: tuple[int, ...] = (),
         budget: float = 3.0,
     ) -> SupervisorResult:
         started = time.monotonic()
@@ -376,6 +398,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
                 watch_error,
                 target,
                 dns_hostname,
+                io_mounts,
                 error,
             )
         token = {"boot": str(boot), "session": str(session), "sequence": sequence}
@@ -398,6 +421,8 @@ class CollectionSupervisor(NetworkCollectionWorker):
                     "watch_error": watch_error,
                     "network_target": target,
                     "dns_hostname": dns_hostname,
+                    "io_mounts": io_mounts,
+                    "io_pids": io_pids,
                 },
             )
             response_deadline = deadline - TEARDOWN_RESERVE
@@ -412,7 +437,8 @@ class CollectionSupervisor(NetworkCollectionWorker):
                 elif (
                     not isinstance(result_kind, str)
                     or result_kind in results
-                    or result_kind not in {"filesystem", "cpu", "memory", "fd", "network", "dns"}
+                    or result_kind
+                    not in {"filesystem", "cpu", "memory", "fd", "network", "dns", "io"}
                 ):
                     raise ValueError("collection_supervisor_duplicate_or_unknown_result")
                 elif kind == "result":
@@ -428,7 +454,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
             results.clear()
         except (EOFError, OSError):
             pass
-        expected_results = {"filesystem", "cpu", "memory", "fd", "network"}
+        expected_results = {"filesystem", "cpu", "memory", "fd", "network", "io"}
         if dns_hostname is not None:
             expected_results.add("dns")
         if not complete or set(results) != expected_results:
@@ -442,6 +468,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
             watch_error,
             target,
             dns_hostname,
+            io_mounts,
             "collection_supervisor_timeout",
         )
         try:
@@ -463,6 +490,7 @@ class CollectionSupervisor(NetworkCollectionWorker):
                 ),
                 results.get("network") or fallback.network,
                 (results.get("dns") or fallback.dns) if dns_hostname is not None else None,
+                results.get("io") or fallback.io,
             )
         except (KeyError, TypeError, ValidationError):
             self.close()

@@ -406,7 +406,9 @@ def test_worker_startup_failure_and_hard_timeout_leave_no_owned_group() -> None:
 @pytest.mark.skipif(os.name != "posix", reason="real multiprocessing pipe fd semantics")
 def test_worker_partial_result_frame_is_bounded_and_reaps_owned_group() -> None:
     worker = NetworkCollectionWorker(target=worker_with_partial_result)
-    assert worker.wait_ready(2.0)
+    # Readiness covers spawn/import only; the partial-frame collection deadline
+    # below remains independently bounded at 0.2 seconds.
+    assert worker.wait_ready(15.0)
     pgid = worker.pgid
     assert pgid is not None
     started = time.monotonic()

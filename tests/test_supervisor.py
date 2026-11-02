@@ -14,13 +14,17 @@ import fleetdoctor.supervisor as supervisor_module
 from fleetdoctor.network import _group_members, _proc_identity
 from fleetdoctor.schema import (
     CpuObservation,
+    DnsObservation,
     FdObservation,
     Filesystem,
     HostMemoryObservation,
+    IoObservation,
     MemoryObservation,
     NetworkObservation,
 )
 from fleetdoctor.supervisor import CollectionSupervisor, _receive_frame, _send_frame
+
+SPAWN_READY_TIMEOUT = 15.0
 
 
 class FakeConnection:
@@ -55,6 +59,7 @@ def payloads() -> dict[str, Any]:
         "network": NetworkObservation.unavailable("10.0.0.10", "diagnostic").model_dump(
             mode="json"
         ),
+        "io": IoObservation(status="disabled", inventory_complete=True).model_dump(mode="json"),
     }
 
 
@@ -132,9 +137,25 @@ class DiagnosticFdCollector:
         return FdObservation(errors=["production_peer"])
 
 
+class DiagnosticIoCollector:
+    def collect(self, *_args: Any, **_kwargs: Any) -> IoObservation:
+        return IoObservation(status="disabled", inventory_complete=True)
+
+
+class StalledIoCollector:
+    def collect(self, *_args: Any, **_kwargs: Any) -> IoObservation:
+        time.sleep(30)
+        raise AssertionError("unreachable")
+
+
 class StalledDnsCollector:
     def collect(self, _hostname: str, _target: str) -> Any:
         time.sleep(30)
+
+
+class CompletedDnsCollector:
+    def collect(self, hostname: str, target: str) -> DnsObservation:
+        return DnsObservation.unavailable(hostname, target, "completed_dns_peer")
 
 
 class OversizeDnsValue:
@@ -148,7 +169,11 @@ class OversizeDnsCollector:
         return OversizeDnsValue()
 
 
-def _production_target(conn: Any, dns_collector: type[Any]) -> None:
+def _production_target(
+    conn: Any,
+    dns_collector: type[Any],
+    io_collector: type[Any] = DiagnosticIoCollector,
+) -> None:
     supervisor_module._collect_filesystems = lambda paths: [
         Filesystem(mountpoint=path, errors=["production_peer"]) for path in paths
     ]
@@ -157,6 +182,7 @@ def _production_target(conn: Any, dns_collector: type[Any]) -> None:
     supervisor_module.__dict__["NetworkCollector"] = DiagnosticNetworkCollector
     supervisor_module.__dict__["FdCollector"] = DiagnosticFdCollector
     supervisor_module.__dict__["DnsCollector"] = dns_collector
+    supervisor_module.__dict__["IoCollector"] = io_collector
     supervisor_module._supervisor_worker(conn)
 
 
@@ -166,6 +192,10 @@ def production_dns_stall_worker(conn: Any) -> None:
 
 def production_dns_oversize_worker(conn: Any) -> None:
     _production_target(conn, OversizeDnsCollector)
+
+
+def production_io_stall_worker(conn: Any) -> None:
+    _production_target(conn, CompletedDnsCollector, StalledIoCollector)
 
 
 def partial_dns_result_worker(conn: Any) -> None:
@@ -190,6 +220,50 @@ def partial_dns_result_worker(conn: Any) -> None:
                 "token": request["token"],
                 "result_kind": kind,
                 "payload": value,
+            },
+        )
+    os.write(conn.fileno(), struct.pack("!i", 4096) + b"{")
+    time.sleep(30)
+
+
+def partial_io_result_worker(conn: Any) -> None:
+    os.setsid()
+    identity = _proc_identity(os.getpid())
+    assert identity is not None
+    _send_frame(
+        conn,
+        {
+            "ready": True,
+            "pid": os.getpid(),
+            "pgid": os.getpgrp(),
+            "starttime": identity[2],
+        },
+    )
+    request = _receive_frame(conn)
+    for kind, value in payloads().items():
+        if kind == "io":
+            continue
+        _send_frame(
+            conn,
+            {
+                "kind": "result",
+                "token": request["token"],
+                "result_kind": kind,
+                "payload": value,
+            },
+        )
+    if request["dns_hostname"] is not None:
+        _send_frame(
+            conn,
+            {
+                "kind": "result",
+                "token": request["token"],
+                "result_kind": "dns",
+                "payload": DnsObservation.unavailable(
+                    request["dns_hostname"],
+                    request["network_target"],
+                    "completed_dns_peer",
+                ).model_dump(mode="json"),
             },
         )
     os.write(conn.fileno(), struct.pack("!i", 4096) + b"{")
@@ -321,6 +395,7 @@ def test_supervisor_fd_never_consumes_a_failed_cpu_result() -> None:
                 "result_kind": "network",
                 "payload": values["network"],
             },
+            {"kind": "result", "token": token, "result_kind": "io", "payload": values["io"]},
             {"kind": "complete", "token": token},
         ]
 
@@ -457,7 +532,7 @@ def test_partial_startup_frame_honors_parent_deadline_and_reaps_owned_process(ta
     process = supervisor.process
     assert process is not None and process.pid is not None
     pid = process.pid
-    assert supervisor.conn is not None and supervisor.conn.poll(2.0)
+    assert supervisor.conn is not None and supervisor.conn.poll(SPAWN_READY_TIMEOUT)
     started = time.monotonic()
     result = supervisor.collect_all(
         uuid4(),
@@ -484,7 +559,7 @@ def test_partial_startup_frame_honors_parent_deadline_and_reaps_owned_process(ta
 @pytest.mark.parametrize("target", [partial_result_header, partial_result_body])
 def test_partial_result_frame_preserves_valid_fact_and_reaps_owned_group(target: Any) -> None:
     supervisor = CollectionSupervisor(target=target)
-    assert supervisor.wait_ready(2.0)
+    assert supervisor.wait_ready(SPAWN_READY_TIMEOUT)
     pgid = supervisor.pgid
     assert pgid is not None
     started = time.monotonic()
@@ -523,7 +598,7 @@ def _assert_production_peers_survive_dns_failure(result: Any) -> None:
 @pytest.mark.skipif(os.name != "posix", reason="real production process-group semantics")
 def test_production_six_future_dns_stall_preserves_peers_and_reaps_group() -> None:
     supervisor = CollectionSupervisor(target=production_dns_stall_worker)
-    assert supervisor.wait_ready(2.0)
+    assert supervisor.wait_ready(SPAWN_READY_TIMEOUT)
     pgid = supervisor.pgid
     assert pgid is not None
     started = time.monotonic()
@@ -551,7 +626,7 @@ def test_production_six_future_dns_stall_preserves_peers_and_reaps_group() -> No
 @pytest.mark.skipif(os.name != "posix", reason="real production process-group semantics")
 def test_production_dns_oversize_isolated_from_five_peer_results() -> None:
     supervisor = CollectionSupervisor(target=production_dns_oversize_worker)
-    assert supervisor.wait_ready(2.0)
+    assert supervisor.wait_ready(SPAWN_READY_TIMEOUT)
     pgid = supervisor.pgid
     assert pgid is not None
     started = time.monotonic()
@@ -581,7 +656,7 @@ def test_production_dns_oversize_isolated_from_five_peer_results() -> None:
 @pytest.mark.skipif(os.name != "posix", reason="real production process-group semantics")
 def test_partial_dns_frame_preserves_all_five_peers_and_reaps_group() -> None:
     supervisor = CollectionSupervisor(target=partial_dns_result_worker)
-    assert supervisor.wait_ready(2.0)
+    assert supervisor.wait_ready(SPAWN_READY_TIMEOUT)
     pgid = supervisor.pgid
     assert pgid is not None
     started = time.monotonic()
@@ -607,5 +682,81 @@ def test_partial_dns_frame_preserves_all_five_peers_and_reaps_group() -> None:
     assert result.fd.errors == ["diagnostic"]
     assert result.network.probe.errors == ["diagnostic"]
     assert result.dns is not None and result.dns.query.status == "unavailable"
+    assert supervisor.process is None and not supervisor.stuck
+    assert _group_members(pgid) == {}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="real production process-group semantics")
+def test_production_io_stall_preserves_every_completed_peer_within_three_seconds() -> None:
+    supervisor = CollectionSupervisor(target=production_io_stall_worker)
+    assert supervisor.wait_ready(SPAWN_READY_TIMEOUT)
+    pgid = supervisor.pgid
+    assert pgid is not None
+    started = time.monotonic()
+    result = supervisor.collect_all(
+        uuid4(),
+        uuid4(),
+        7,
+        ("/",),
+        (),
+        (),
+        (),
+        "unavailable",
+        None,
+        "watch_unavailable",
+        "10.0.0.10",
+        "baseline.fleetdoctor.test.",
+        io_mounts=("/io",),
+        budget=3.0,
+    )
+    elapsed = time.monotonic() - started
+    print(json.dumps({"probe": "production_io_stall", "collect_all_seconds": elapsed}))
+    assert elapsed < 3.0
+    assert result.filesystems[0].errors == ["production_peer"]
+    assert result.cpu.errors == ["production_peer"]
+    assert result.memory.host.errors == ["production_peer"]
+    assert result.fd.errors == ["production_peer"]
+    assert result.network.probe.errors == ["production_peer"]
+    assert result.dns is not None
+    assert result.dns.query.error == "completed_dns_peer"
+    assert result.io.errors == ["collection_supervisor_timeout"]
+    assert supervisor.process is None and not supervisor.stuck
+    assert _group_members(pgid) == {}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="real production process-group semantics")
+def test_partial_io_frame_preserves_every_completed_peer_and_reaps_group() -> None:
+    supervisor = CollectionSupervisor(target=partial_io_result_worker)
+    assert supervisor.wait_ready(SPAWN_READY_TIMEOUT)
+    pgid = supervisor.pgid
+    assert pgid is not None
+    started = time.monotonic()
+    result = supervisor.collect_all(
+        uuid4(),
+        uuid4(),
+        7,
+        ("/",),
+        (),
+        (),
+        (),
+        "unavailable",
+        None,
+        "watch_unavailable",
+        "10.0.0.10",
+        "baseline.fleetdoctor.test.",
+        io_mounts=("/io",),
+        budget=3.0,
+    )
+    elapsed = time.monotonic() - started
+    print(json.dumps({"probe": "partial_io_frame", "collect_all_seconds": elapsed}))
+    assert elapsed < 3.0
+    assert result.filesystems[0].errors == ["diagnostic"]
+    assert result.cpu.errors == ["diagnostic"]
+    assert result.memory.host.errors == ["diagnostic"]
+    assert result.fd.errors == ["diagnostic"]
+    assert result.network.probe.errors == ["diagnostic"]
+    assert result.dns is not None
+    assert result.dns.query.error == "completed_dns_peer"
+    assert result.io.errors == ["collection_supervisor_timeout"]
     assert supervisor.process is None and not supervisor.stuck
     assert _group_members(pgid) == {}

@@ -48,7 +48,11 @@ def prove(
     ) -> None:
         nonlocal sequence, observed
         sequence += 1
-        observed += timedelta(milliseconds=100)
+        # Restarts and datasource checks consume real wall time. Keep synthetic
+        # observations strictly increasing but current enough for the next
+        # Prometheus scrape; never rely on a fixed 100 ms logical clock while
+        # the product correctly enforces a 10-second freshness window.
+        observed = max(observed + timedelta(milliseconds=100), datetime.now(UTC))
         events = MemoryEvents(oom=oom, oom_kill=kills)
         events_before = events if stable else MemoryEvents(oom=max(0, oom - 1), oom_kill=kills)
         memory = MemoryObservation(

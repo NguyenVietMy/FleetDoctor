@@ -30,7 +30,7 @@ from fleetdoctor.schema import (
 
 MAX_HOST_READ = 64 * 1024
 MAX_CGROUP_READ = 8 * 1024
-MAX_CGROUPS = 4
+MAX_CGROUPS = 8
 MAX_PATH = 256
 MAX_RSS_PROCESSES = 10
 MAX_JOURNAL_RECORDS = 64
@@ -106,7 +106,7 @@ def validate_cgroup_paths(raw: str) -> tuple[str, ...]:
         return ()
     paths = tuple(raw.split(","))
     if len(paths) > MAX_CGROUPS or len(set(paths)) != len(paths):
-        raise ValueError("configure at most four unique cgroup paths")
+        raise ValueError("configure at most eight unique cgroup paths")
     if any(
         len(path) > MAX_PATH
         or path == "/"

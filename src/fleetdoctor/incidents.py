@@ -100,6 +100,25 @@ class DnsConfig(BaseModel):
     severity: Literal["info", "warning", "critical"] = "warning"
 
 
+class IoConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+    trigger_latency_ms: float = Field(default=20, gt=0, le=60_000)
+    trigger_outstanding: float = Field(default=1, ge=0, le=1_000_000)
+    recovery_latency_ms: float = Field(default=10, ge=0, le=60_000)
+    recovery_outstanding: float = Field(default=0.5, ge=0, le=1_000_000)
+    consecutive_samples: int = Field(default=3, ge=1, le=120, strict=True)
+    max_gap_seconds: float = Field(default=10, gt=0, le=10)
+    severity: Literal["info", "warning", "critical"] = "warning"
+
+    @model_validator(mode="after")
+    def hysteresis(self) -> Self:
+        if self.recovery_latency_ms >= self.trigger_latency_ms:
+            raise ValueError("I/O latency recovery must be below trigger")
+        if self.recovery_outstanding >= self.trigger_outstanding:
+            raise ValueError("I/O backlog recovery must be below trigger")
+        return self
+
+
 class Incident(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: UUID
@@ -113,12 +132,20 @@ class Incident(BaseModel):
         "fd_pressure",
         "network_path_degradation",
         "dns_resolution_failure",
+        "io_bottleneck",
     ] = "disk_block_exhaustion"
-    status: Literal["active", "resolved"] = "active"
+    status: Literal["active", "resolved", "superseded"] = "active"
     severity: Literal["info", "warning", "critical"] = "critical"
     diagnosis: str
     configuration: (
-        DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig | DnsConfig
+        DiskConfig
+        | InodeConfig
+        | CpuConfig
+        | OomConfig
+        | FdConfig
+        | NetworkConfig
+        | DnsConfig
+        | IoConfig
     )
     opening_evidence: dict[str, JsonValue]
     latest_evidence: dict[str, JsonValue]
@@ -130,6 +157,9 @@ class Incident(BaseModel):
     resolution_reason: Literal["descriptor_release", "confirmed_exit", "boot_replaced"] | None = (
         None
     )
+    superseded_at: datetime | None = None
+    supersession_reason: Literal["positive_resource_replacement"] | None = None
+    replacement_resource_evidence: dict[str, JsonValue] | None = None
     investigation_steps: list[str]
 
     @model_validator(mode="before")
@@ -140,7 +170,14 @@ class Incident(BaseModel):
             return value
         rule = value.get("rule", "disk_block_exhaustion")
         configuration: (
-            DiskConfig | InodeConfig | CpuConfig | OomConfig | FdConfig | NetworkConfig | DnsConfig
+            DiskConfig
+            | InodeConfig
+            | CpuConfig
+            | OomConfig
+            | FdConfig
+            | NetworkConfig
+            | DnsConfig
+            | IoConfig
         )
         if rule == "disk_block_exhaustion":
             configuration = DiskConfig.model_validate(value["configuration"])
@@ -156,6 +193,8 @@ class Incident(BaseModel):
             configuration = NetworkConfig.model_validate(value["configuration"])
         elif rule == "dns_resolution_failure":
             configuration = DnsConfig.model_validate(value["configuration"])
+        elif rule == "io_bottleneck":
+            configuration = IoConfig.model_validate(value["configuration"])
         else:
             return value
         result = dict(value)
@@ -172,6 +211,7 @@ class Incident(BaseModel):
             "fd_pressure": FdConfig,
             "network_path_degradation": NetworkConfig,
             "dns_resolution_failure": DnsConfig,
+            "io_bottleneck": IoConfig,
         }[self.rule]
         if not isinstance(self.configuration, expected):
             raise ValueError("incident rule and configuration disagree")
@@ -183,6 +223,7 @@ class Incident(BaseModel):
             "fd_pressure": "fd_available",
             "network_path_degradation": "network_available",
             "dns_resolution_failure": "dns_available",
+            "io_bottleneck": "io_available",
         }[self.rule]
         if availability not in self.opening_evidence or availability not in self.latest_evidence:
             raise ValueError("incident evidence does not match rule")
@@ -203,6 +244,26 @@ class Incident(BaseModel):
             raise ValueError(
                 "DNS resource must include the configured hostname and direct-IP target"
             )
+        if self.rule == "io_bottleneck" and not self.resource.startswith("io:"):
+            raise ValueError("I/O bottleneck resource must use its durable device fingerprint")
+        if self.status == "superseded":
+            if (
+                self.rule != "io_bottleneck"
+                or self.superseded_at is None
+                or self.supersession_reason != "positive_resource_replacement"
+                or self.replacement_resource_evidence is None
+                or self.resolved_at is not None
+            ):
+                raise ValueError("superseded I/O incident requires explicit replacement evidence")
+        elif any(
+            value is not None
+            for value in (
+                self.superseded_at,
+                self.supersession_reason,
+                self.replacement_resource_evidence,
+            )
+        ):
+            raise ValueError("only superseded incidents carry supersession metadata")
         if not self.investigation_steps or any(
             len(step) > 512 for step in self.investigation_steps
         ):
@@ -220,6 +281,7 @@ class Incident(BaseModel):
             "fd_pressure": "fd_available",
             "network_path_degradation": "network_available",
             "dns_resolution_failure": "dns_available",
+            "io_bottleneck": "io_available",
         }[self.rule]
         result.update(
             evidence_age_seconds=max(0, age),

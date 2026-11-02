@@ -208,12 +208,21 @@ async def prove_outage(
 
         async def wait_for(predicate: Any, timeout: float = 25) -> Any:
             end = time.monotonic() + timeout
+            last_transport_error: httpx.TransportError | None = None
             while time.monotonic() < end:
-                value = await predicate()
+                try:
+                    value = await predicate()
+                except httpx.TransportError as error:
+                    # Service restarts may close a connection between readiness
+                    # checks. Keep polling inside the existing bounded deadline;
+                    # HTTP status and response-validation failures still escape.
+                    last_transport_error = error
+                    await asyncio.sleep(0.2)
+                    continue
                 if value:
                     return value
                 await asyncio.sleep(0.2)
-            raise TimeoutError("outage scenario condition deadline")
+            raise TimeoutError("outage scenario condition deadline") from last_transport_error
 
         async def active() -> list[dict[str, Any]]:
             return list((await get("/diagnoses?node=node-a&status=active"))["diagnoses"])

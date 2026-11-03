@@ -86,24 +86,32 @@ def command(argv: list[str], timeout: float = 10) -> subprocess.CompletedProcess
 
 
 def _trusted_file(path: Path) -> dict[str, Any] | None:
-    try:
-        before = path.lstat()
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except FileNotFoundError:
-        return None
-    with os.fdopen(descriptor, encoding="utf-8") as stream:
-        metadata = os.fstat(stream.fileno())
-        if (
-            path.is_symlink()
-            or not stat.S_ISREG(metadata.st_mode)
-            or (before.st_dev, before.st_ino) != (metadata.st_dev, metadata.st_ino)
-            or metadata.st_nlink != 1
-            or metadata.st_uid != STATE_OWNER_UID
-            or metadata.st_mode & 0o077
-        ):
-            raise ValueError("untrusted OOM helper state")
-        value: dict[str, Any] = json.load(stream)
-    return value
+    for _ in range(3):
+        try:
+            before = path.lstat()
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except FileNotFoundError:
+            return None
+        with os.fdopen(descriptor, encoding="utf-8") as stream:
+            metadata = os.fstat(stream.fileno())
+            if (
+                path.is_symlink()
+                or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink not in (0, 1)
+                or metadata.st_uid != STATE_OWNER_UID
+                or metadata.st_mode & 0o077
+            ):
+                raise ValueError("untrusted OOM helper state")
+            # The supervisor publishes phase changes with an atomic replace.
+            # Close a superseded descriptor and revalidate the current file.
+            if (before.st_dev, before.st_ino) != (
+                metadata.st_dev,
+                metadata.st_ino,
+            ) or metadata.st_nlink == 0:
+                continue
+            value: dict[str, Any] = json.load(stream)
+        return value
+    raise ValueError("OOM helper state changed repeatedly while reading")
 
 
 def trusted_state(token: str) -> dict[str, Any] | None:

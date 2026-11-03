@@ -1,0 +1,26 @@
+{
+  "dashboards": [
+    {
+      "uid": "fleetdoctor-node",
+      "panels": [
+        {"id": 86, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "completion_latency_seconds"}, {"refId": "B", "datasource": "prometheus", "semantic": "weighted_average_outstanding"}]},
+        {"id": 87, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "read_bytes_per_second"}, {"refId": "B", "datasource": "prometheus", "semantic": "write_bytes_per_second"}, {"refId": "C", "datasource": "prometheus", "semantic": "completions_per_second"}, {"refId": "D", "datasource": "prometheus", "semantic": "endpoint_inflight"}]},
+        {"id": 88, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "interval_coverage"}, {"refId": "B", "datasource": "prometheus", "semantic": "admission_capacity"}, {"refId": "C", "datasource": "prometheus", "semantic": "candidate_overflow"}, {"refId": "D", "datasource": "prometheus", "semantic": "psi_context"}]},
+        {"id": 89, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "active_incidents"}]},
+        {"id": 90, "targets": [{"refId": "A", "datasource": "incidents", "semantic": "complete_io_opening_latest_supersession_context_and_steps"}]}
+      ]
+    },
+    {
+      "uid": "fleetdoctor-fleet",
+      "panels": [
+        {"id": 86, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "completion_latency_seconds"}]},
+        {"id": 87, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "weighted_average_outstanding"}]},
+        {"id": 88, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "read_bytes_per_second"}, {"refId": "B", "datasource": "prometheus", "semantic": "write_bytes_per_second"}]},
+        {"id": 89, "targets": [{"refId": "A", "datasource": "prometheus", "semantic": "coverage"}, {"refId": "B", "datasource": "prometheus", "semantic": "active_incidents"}, {"refId": "C", "datasource": "prometheus", "semantic": "candidate_overflow"}]}
+      ]
+    }
+  ],
+  "required_states": ["healthy_idle", "active_failure", "unavailable", "stale", "resolved", "superseded"],
+  "detail_minimum_dimensions": {"width": 2400, "height": 2000},
+  "graph_minimum_dimensions": {"width": 2000, "height": 1000}
+}

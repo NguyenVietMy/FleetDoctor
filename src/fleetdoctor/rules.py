@@ -2,8 +2,10 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
+
+from pydantic import JsonValue
 
 from fleetdoctor.fd import MAX_ACTIVE_WATCHES, parse_resource
 from fleetdoctor.incidents import (
@@ -13,6 +15,7 @@ from fleetdoctor.incidents import (
     FdConfig,
     Incident,
     InodeConfig,
+    IoConfig,
     NetworkConfig,
     OomConfig,
 )
@@ -20,6 +23,7 @@ from fleetdoctor.schema import (
     DnsBaselineObservation,
     FdProcessObservation,
     Filesystem,
+    IoDeviceObservation,
     NetworkProbeObservation,
     Sample,
     WorkloadMemoryObservation,
@@ -54,6 +58,7 @@ class Window:
         | FdConfig
         | NetworkConfig
         | DnsConfig
+        | IoConfig
         | None
     ) = None
     guard_percent: float | None = None
@@ -1183,6 +1188,275 @@ class DnsEvaluator:
         return changes
 
 
+MAX_ACTIVE_IO_RESOURCES = 16
+MAX_PENDING_IO_RESOURCES = 4
+
+
+def io_evidence(sample: Sample, device: IoDeviceObservation | None) -> dict[str, Any]:
+    observation = sample.io
+    return {
+        "node_id": sample.node_id,
+        "boot_id": str(sample.boot_id),
+        "agent_session_id": str(sample.agent_session_id),
+        "sequence": sample.sequence,
+        "observed_at": sample.observed_at.isoformat(),
+        "io_available": bool(device is not None and device.rate_status == "available"),
+        "resource": device.resource if device is not None else None,
+        "device": device.model_dump(mode="json") if device is not None else None,
+        "scopes": list(device.scopes) if device is not None else [],
+        "last_positive_scopes": list(device.scopes) if device is not None else [],
+        "inventory_complete": observation.inventory_complete if observation is not None else False,
+        "configured_scopes": list(observation.configured_scopes) if observation is not None else [],
+        "mapping_errors": dict(observation.mapping_errors) if observation is not None else {},
+        "host_and_cgroup_pressure": [item.model_dump(mode="json") for item in observation.pressure]
+        if observation is not None
+        else [],
+        "process_context": [item.model_dump(mode="json") for item in observation.processes]
+        if observation is not None
+        else [],
+        "process_attribution": "context_only_not_device_causation",
+        "coverage": {
+            "collection": observation.status if observation is not None else "unavailable",
+            "rate": device.rate_status if device is not None else "unavailable",
+            "confirmed_idle": bool(device is not None and device.confirmed_idle),
+            "errors": device.errors if device is not None else ["device_observation_missing"],
+        },
+    }
+
+
+class IoEvaluator:
+    def __init__(self, active: list[Incident]) -> None:
+        self.active = {(item.node_id, item.resource): item for item in active}
+        self.windows: dict[tuple[str, str], Window] = {}
+        self.reloaded = {item.id for item in active}
+        self.admission_overflow_nodes: set[str] = set()
+
+    @staticmethod
+    def _steps() -> list[str]:
+        return [
+            "Confirm the latest interval is fresh, same-generation, and has complete raw counter endpoints.",
+            "Inspect the selected major:minor, stable device/filesystem binding, sysfs path, and current mount scopes.",
+            "Compare completion latency and weighted-average outstanding I/O; do not substitute instantaneous inflight.",
+            "Review host/cgroup I/O pressure and physical process byte rates only as context, not device attribution.",
+            "Check device errors, queueing, filesystem health, and workload changes before taking bounded action.",
+        ]
+
+    def evaluate(
+        self, sample: Sample, _previous: Sample | None, now: datetime, config: IoConfig
+    ) -> list[Incident]:
+        observation = sample.io
+        changes: list[Incident] = []
+        devices = (
+            {item.resource: item for item in observation.devices} if observation is not None else {}
+        )
+
+        def continuous(device: IoDeviceObservation, rule_config: IoConfig) -> bool:
+            if _previous is None or _previous.io is None:
+                return False
+            if (
+                sample.boot_id != _previous.boot_id
+                or sample.agent_session_id != _previous.agent_session_id
+                or sample.sequence <= _previous.sequence
+                or sample.observed_at <= _previous.observed_at
+                or (sample.observed_at - _previous.observed_at).total_seconds()
+                > rule_config.max_gap_seconds
+                or device.rate_status != "available"
+                or device.counters_before is None
+            ):
+                return False
+            prior = next(
+                (item for item in _previous.io.devices if item.resource == device.resource), None
+            )
+            return bool(prior is not None and prior.counters == device.counters_before)
+
+        node_active = {
+            resource: incident
+            for (node, resource), incident in self.active.items()
+            if node == sample.node_id
+        }
+
+        # A complete inventory can terminate an old generation only when a stable
+        # replacement occupies one of its former scopes and none remains on old.
+        if observation is not None and observation.inventory_complete:
+            for resource, incident in sorted(node_active.items()):
+                if resource in devices:
+                    continue
+                raw_scopes = incident.latest_evidence.get(
+                    "last_positive_scopes", incident.latest_evidence.get("scopes", [])
+                )
+                old_scopes = (
+                    {str(scope) for scope in raw_scopes} if isinstance(raw_scopes, list) else set()
+                )
+                replacements = [
+                    item
+                    for item in devices.values()
+                    if old_scopes.intersection(item.scopes) and item.resource != resource
+                ]
+                if not replacements:
+                    continue
+                updated = incident.model_copy(deep=True)
+                updated.status = "superseded"
+                updated.superseded_at = sample.observed_at
+                updated.supersession_reason = "positive_resource_replacement"
+                updated.replacement_resource_evidence = cast(
+                    dict[str, JsonValue],
+                    {
+                        "inventory_complete": True,
+                        "old_scopes": sorted(old_scopes),
+                        "replacements": [
+                            {"resource": item.resource, "scopes": item.scopes}
+                            for item in sorted(replacements, key=lambda item: item.resource)
+                        ],
+                    },
+                )
+                updated.latest_evidence = cast(
+                    dict[str, JsonValue],
+                    {
+                        **updated.latest_evidence,
+                        "io_available": False,
+                        "inventory_complete": True,
+                        "configured_scopes": observation.configured_scopes,
+                        "mapping_errors": observation.mapping_errors,
+                        "coverage": {"collection": observation.status, "rate": "superseded"},
+                    },
+                )
+                updated.observed_at = sample.observed_at
+                updated.evaluated_at = now
+                updated.updated_at = now
+                self.active.pop((sample.node_id, resource), None)
+                self.windows.pop((sample.node_id, resource), None)
+                self.reloaded.discard(updated.id)
+                changes.append(updated)
+
+        observed_keys = {(sample.node_id, resource) for resource in devices}
+        for key in list(self.windows):
+            if key[0] == sample.node_id and key not in observed_keys and key not in self.active:
+                self.windows.pop(key)
+
+        active_count = sum(node == sample.node_id for node, _resource in self.active)
+        unopened = sorted(
+            resource
+            for resource, device in devices.items()
+            if (sample.node_id, resource) not in self.active
+            and continuous(device, config)
+            and device.completion_latency_ms is not None
+            and device.completion_latency_ms >= config.trigger_latency_ms
+            and device.average_outstanding is not None
+            and device.average_outstanding >= config.trigger_outstanding
+        )
+        admitted_unopened = set(unopened[:MAX_PENDING_IO_RESOURCES])
+        if len(unopened) > MAX_PENDING_IO_RESOURCES:
+            self.admission_overflow_nodes.add(sample.node_id)
+        else:
+            self.admission_overflow_nodes.discard(sample.node_id)
+
+        for resource, device in sorted(devices.items()):
+            key = (sample.node_id, resource)
+            active_incident = self.active.get(key)
+            facts = io_evidence(sample, device)
+            if active_incident is not None:
+                updated = active_incident.model_copy(deep=True)
+                updated.latest_evidence = facts
+                updated.observed_at = sample.observed_at
+                updated.evaluated_at = now
+                updated.updated_at = now
+                active_config = IoConfig.model_validate(active_incident.configuration)
+                window = self.windows.setdefault(key, Window(configuration=active_config))
+                is_continuous = continuous(device, active_config)
+                if not is_continuous:
+                    facts = cast(
+                        dict[str, JsonValue],
+                        {
+                            **facts,
+                            "io_available": False,
+                            "coverage": {
+                                **cast(dict[str, JsonValue], facts["coverage"]),
+                                "rate": "continuity_reset",
+                            },
+                        },
+                    )
+                    updated.latest_evidence = facts
+                recovered = bool(
+                    is_continuous
+                    and (
+                        device.confirmed_idle
+                        or (
+                            device.completion_latency_ms is not None
+                            and device.completion_latency_ms < active_config.recovery_latency_ms
+                            and device.average_outstanding is not None
+                            and device.average_outstanding < active_config.recovery_outstanding
+                        )
+                    )
+                )
+                window.recovery = window.recovery + 1 if recovered else 0
+                if window.recovery >= active_config.consecutive_samples:
+                    updated.status = "resolved"
+                    updated.resolved_at = sample.observed_at
+                    self.active.pop(key, None)
+                    self.windows.pop(key, None)
+                    self.reloaded.discard(updated.id)
+                else:
+                    self.active[key] = updated
+                    self.reloaded.discard(updated.id)
+                changes.append(updated)
+                continue
+            if resource not in admitted_unopened:
+                self.windows.pop(key, None)
+                continue
+            window = self.windows.setdefault(key, Window(configuration=config))
+            if window.configuration != config:
+                window = self.windows[key] = Window(configuration=config)
+            window.opening += 1
+            if window.opening < config.consecutive_samples:
+                continue
+            if active_count >= MAX_ACTIVE_IO_RESOURCES:
+                self.admission_overflow_nodes.add(sample.node_id)
+                self.windows.pop(key, None)
+                continue
+            opened = Incident(
+                id=uuid4(),
+                node_id=sample.node_id,
+                resource=resource,
+                rule="io_bottleneck",
+                status="active",
+                severity=config.severity,
+                diagnosis="Sustained device I/O completion latency and weighted backlog exceed the configured warning thresholds.",
+                configuration=config,
+                opening_evidence=facts,
+                latest_evidence=facts,
+                opened_at=sample.observed_at,
+                observed_at=sample.observed_at,
+                evaluated_at=now,
+                updated_at=now,
+                investigation_steps=self._steps(),
+            )
+            self.active[key] = opened
+            active_count += 1
+            self.windows.pop(key, None)
+            changes.append(opened)
+
+        # Missing or unavailable devices update active evidence but cannot recover.
+        for (node, resource), incident in sorted(self.active.items()):
+            if node != sample.node_id or resource in devices:
+                continue
+            updated = incident.model_copy(deep=True)
+            missing_facts = io_evidence(sample, None)
+            raw_last_scopes = incident.latest_evidence.get(
+                "last_positive_scopes", incident.latest_evidence.get("scopes", [])
+            )
+            missing_facts["last_positive_scopes"] = raw_last_scopes
+            updated.latest_evidence = missing_facts
+            updated.observed_at = sample.observed_at
+            updated.evaluated_at = now
+            updated.updated_at = now
+            self.active[(node, resource)] = updated
+            self.windows.setdefault(
+                (node, resource), Window(configuration=incident.configuration)
+            ).recovery = 0
+            changes.append(updated)
+        return changes
+
+
 class CompositeEvaluator:
     def __init__(self, active: list[Incident]) -> None:
         self.disk = DiskEvaluator([i for i in active if i.rule == "disk_block_exhaustion"])
@@ -1192,6 +1466,7 @@ class CompositeEvaluator:
         self.fd = FdEvaluator([i for i in active if i.rule == "fd_pressure"])
         self.network = NetworkEvaluator([i for i in active if i.rule == "network_path_degradation"])
         self.dns = DnsEvaluator([i for i in active if i.rule == "dns_resolution_failure"])
+        self.io = IoEvaluator([i for i in active if i.rule == "io_bottleneck"])
 
     @property
     def active(self) -> dict[tuple[str, str, str], Incident]:
@@ -1205,6 +1480,7 @@ class CompositeEvaluator:
                 *self.fd.active.values(),
                 *self.network.active.values(),
                 *self.dns.active.values(),
+                *self.io.active.values(),
             ]
         }
 
@@ -1218,6 +1494,7 @@ class CompositeEvaluator:
             | set(self.fd.reloaded)
             | set(self.network.reloaded)
             | set(self.dns.reloaded)
+            | set(self.io.reloaded)
         )
 
     def reset_node(self, node: str) -> None:
@@ -1229,6 +1506,7 @@ class CompositeEvaluator:
             self.fd,
             self.network,
             self.dns,
+            self.io,
         ):
             for key in list(evaluator.windows):
                 if key[0] == node:
@@ -1252,6 +1530,7 @@ class CompositeEvaluator:
         self.dns.active = {
             (i.node_id, i.resource): i for i in records if i.rule == "dns_resolution_failure"
         }
+        self.io.active = {(i.node_id, i.resource): i for i in records if i.rule == "io_bottleneck"}
         for node in affected:
             self.reset_node(node)
         self.disk.reloaded.update(
@@ -1275,6 +1554,9 @@ class CompositeEvaluator:
         self.dns.reloaded.update(
             i.id for i in records if i.rule == "dns_resolution_failure" and i.node_id in affected
         )
+        self.io.reloaded.update(
+            i.id for i in records if i.rule == "io_bottleneck" and i.node_id in affected
+        )
 
     def evaluate(
         self,
@@ -1288,6 +1570,7 @@ class CompositeEvaluator:
         fd_config: FdConfig,
         network_config: NetworkConfig | None = None,
         dns_config: DnsConfig | None = None,
+        io_config: IoConfig | None = None,
     ) -> list[Incident]:
         return [
             *self.disk.evaluate(sample, previous, now, disk_config),
@@ -1297,4 +1580,5 @@ class CompositeEvaluator:
             *self.fd.evaluate(sample, previous, now, fd_config),
             *self.network.evaluate(sample, previous, now, network_config or NetworkConfig()),
             *self.dns.evaluate(sample, previous, now, dns_config or DnsConfig()),
+            *self.io.evaluate(sample, previous, now, io_config or IoConfig()),
         ]

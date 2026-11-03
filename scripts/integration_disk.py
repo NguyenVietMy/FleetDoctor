@@ -213,6 +213,13 @@ def prove(
             "storage_health_with_table_present": 200,
             "restored_retry": recovered_missing_row.json(),
         }
+        # Refresh the active incident immediately before restart. The preceding
+        # checkpoint fault cases have deliberately variable database latency;
+        # reload staleness must be proved while the evidence age itself is fresh.
+        send(98)
+        before_reload = get("/diagnoses/" + identifier)
+        assert before_reload["evidence_fresh"] and not before_reload["evidence_stale"]
+        proof["fresh_detail_immediately_before_reload"] = before_reload
         checkpoint_before = json.loads(
             psql("SELECT record::text FROM ingestion_checkpoints WHERE node_id='node-a'")
         )
@@ -277,9 +284,6 @@ def prove(
             )
             time.sleep(expiry_delay)
             proof["explicit_failed_observation_expiry_delay_seconds"] = expiry_delay
-            outage = sample(98)
-            failed_outage = post(outage)
-            assert failed_outage.status_code == 503
         finally:
             compose("start", "postgres")
         deadline = time.monotonic() + 8
@@ -297,6 +301,23 @@ def prove(
             "note": "First failed observation explicitly held until expired before retry; connection-error latency is not assumed",
         }
         assert aged_retry.json()["status"] == "ineligible"
+
+        # A cold database start can legitimately exceed the product's 10-second
+        # observation freshness window. Exercise same-observation retry through
+        # a separate, short real database pause after recovery instead of
+        # weakening freshness or pretending that a cold-start sample stayed fresh.
+        outage = sample(98)
+        compose("pause", "postgres")
+        try:
+            failed_outage = post(outage)
+            assert failed_outage.status_code == 503
+        finally:
+            compose("unpause", "postgres")
+        retry_deadline = time.monotonic() + 3
+        while client.get(api + "/health").status_code != 200:
+            if time.monotonic() > retry_deadline:
+                raise TimeoutError("DB unpause too slow for same-observation retry")
+            time.sleep(0.05)
         retried_outage = post(outage)
         proof["outage_retry_details"] = {
             "observation": outage.model_dump(mode="json"),

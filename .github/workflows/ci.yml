@@ -1,4 +1,4 @@
-name: Task 01 through 10 checks
+name: Task 01 through 11 checks
 on: [push, pull_request]
 jobs:
   filesystem-and-services:
@@ -17,25 +17,76 @@ jobs:
       - run: git diff --check
       - name: Run Linux root fixture suite
         run: |
-          tag="fleetdoctor-task10-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
+          tag="fleetdoctor-task11-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
           trap 'docker image rm --force "$tag" >/dev/null 2>&1 || true' EXIT
           docker build --target test --tag "$tag" .
           docker run --rm "$tag"
           docker run --rm --user 10001:10001 "$tag" \
             /app/.venv/bin/python -m pytest -q
-      - run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns'
+      - run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns, fleetdoctor.io'
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.13.1
       - run: terraform -chdir=infra/aws fmt -check
       - run: terraform -chdir=infra/aws init -backend=false -lockfile=readonly
       - run: terraform -chdir=infra/aws validate
-      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task09-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task11-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/disk_helper_integration.py --output $RUNNER_TEMP/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/inode_helper_integration.py --output $RUNNER_TEMP/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/fd_helper_integration.py --output $RUNNER_TEMP/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/network_helper_integration.py --output $RUNNER_TEMP/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - run: uv run python scripts/dns_helper_integration.py --output $RUNNER_TEMP/task10-dns-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - name: Install Ticket11 native prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dmsetup e2fsprogs
+          sudo modprobe dm-delay
+          systemctl show-environment >/dev/null
+          probe_unit="fleetdoctor-ci-systemd-${{ github.run_id }}-${{ github.run_attempt }}.service"
+          sudo systemd-run --unit "$probe_unit" --wait --pipe --property=User=nobody /bin/true
+          sudo systemctl stop "$probe_unit" 2>/dev/null || true
+          sudo systemctl reset-failed "$probe_unit" 2>/dev/null || true
+      - name: Prepare root-readable Ticket11 native runtime
+        run: |
+          native_root="$(sudo mktemp -d "/opt/fleetdoctor-task11-ci-${{ github.run_id }}-${{ github.run_attempt }}.XXXXXX")"
+          echo "FLEETDOCTOR_NATIVE_IO=$native_root" >> "$GITHUB_ENV"
+          sudo chmod 0755 "$native_root"
+          sudo git clone --no-hardlinks "$GITHUB_WORKSPACE" "$native_root/source"
+          sudo git -C "$native_root/source" checkout --detach "$GITHUB_SHA"
+          sudo env UV_CACHE_DIR="$native_root/cache" "$(command -v uv)" sync \
+            --project "$native_root/source" --python /usr/bin/python3 \
+            --no-managed-python --locked --all-extras
+          sudo chmod -R a+rX "$native_root/source"
+          sudo -u nobody env PYTHONDONTWRITEBYTECODE=1 \
+            "$native_root/source/.venv/bin/python" -c \
+            'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.io; print("ticket11 native imports ok")'
+      - name: Prove Ticket11 actual-systemd I/O lifecycle
+        timeout-minutes: 12
+        run: |
+          sudo env \
+            FLEETDOCTOR_COMMON_REPO="$FLEETDOCTOR_NATIVE_IO/source" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            "$FLEETDOCTOR_NATIVE_IO/source/.venv/bin/python" \
+            "$FLEETDOCTOR_NATIVE_IO/source/scripts/io_helper_integration.py" \
+            --output "$RUNNER_TEMP/task11-io-native-${{ github.run_id }}-${{ github.run_attempt }}.json"
+      - name: Package Ticket11 helper state
+        if: always()
+        run: |
+          state="$RUNNER_TEMP/task11-io-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.json"
+          archive="$RUNNER_TEMP/task11-io-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.tar.gz"
+          if sudo test -f "$state"; then
+            sudo tar -C "$RUNNER_TEMP" -czf "$archive" -- "$(basename "$state")"
+            sudo chown "$(id -u):$(id -g)" "$state" "$archive"
+            chmod 0600 "$state" "$archive"
+          fi
+      - name: Remove Ticket11 native runtime
+        if: always()
+        run: |
+          if [ -n "${FLEETDOCTOR_NATIVE_IO:-}" ]; then
+            native_root="$(sudo realpath -e -- "$FLEETDOCTOR_NATIVE_IO")"
+            [[ "$native_root" == /opt/fleetdoctor-task11-ci-${{ github.run_id }}-${{ github.run_attempt }}.* && "$(dirname -- "$native_root")" == /opt ]]
+            sudo rm -rf -- "$native_root"
+          fi
       - run: uv run python scripts/cpu_smoke.py --workers 2 --seconds 2 --output $RUNNER_TEMP/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
       - name: Prepare accessible native OOM runtime
         run: |
@@ -79,14 +130,18 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: task10-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: task11-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/task09-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task11-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task10-dns-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task11-io-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+            ${{ runner.temp }}/task11-io-native-${{ github.run_id }}-${{ github.run_attempt }}-systemd.json
+            ${{ runner.temp }}/task11-io-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.json
+            ${{ runner.temp }}/task11-io-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.tar.gz
             ${{ runner.temp }}/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}-helper-state.tar.gz
             ${{ runner.temp }}/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task06-oom-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json

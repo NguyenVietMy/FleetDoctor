@@ -8,7 +8,7 @@ The display path and generation-qualified persistence key are separate. If a cgr
 
 ## Configuration and collector-first rollout
 
-Deploy the v3-capable collector before the agent. Configure at most four canonical absolute non-root cgroup paths:
+Deploy the v3-capable collector before the agent. Configure at most eight canonical absolute non-root cgroup paths:
 
 ```text
 FLEETDOCTOR_CGROUPS=/system.slice/fleetdoctor-oom-TOKEN.service/workload

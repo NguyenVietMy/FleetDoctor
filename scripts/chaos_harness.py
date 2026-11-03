@@ -29,22 +29,41 @@ class Injector(Protocol):
     def cleanup(self, token: str) -> dict[str, Any]: ...
 
 
-def source_manifest() -> dict[str, Any]:
+def source_manifest(root: Path = ROOT) -> dict[str, Any]:
     paths = subprocess.check_output(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard"], cwd=ROOT, text=True
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"], cwd=root, text=True
     ).splitlines()
-    hashes = {
-        p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest()
-        for p in paths
-        if (ROOT / p).is_file() and not p.startswith((".agents/", ".claude/", ".scratch/"))
-    }
+    included = [
+        path for path in paths if not path.startswith((".agents/", ".claude/", ".scratch/"))
+    ]
+    files = []
+    hashes: dict[str, str] = {}
+    for name in included:
+        path = root / name
+        raw = path.read_bytes() if path.is_file() else None
+        if raw is not None:
+            hashes[name] = hashlib.sha256(raw).hexdigest()
+        committed = subprocess.run(["git", "show", f"HEAD:{name}"], cwd=root, capture_output=True)
+        files.append(
+            {
+                "path": name,
+                "kind": "file" if raw is not None else "deleted",
+                "working_tree_sha256": hashlib.sha256(raw).hexdigest() if raw is not None else None,
+                "git_committed_sha256": hashlib.sha256(committed.stdout).hexdigest()
+                if committed.returncode == 0
+                else None,
+                "tracked_at_head": committed.returncode == 0,
+            }
+        )
     return {
         "revision": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
         ).strip(),
         "dirty": bool(
-            subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True)
+            subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True)
         ),
+        "working_tree_platform": os.name,
+        "files": files,
         "sha256": hashes,
     }
 

@@ -22,6 +22,7 @@ from integration_disk import prove
 from integration_dns import prove as prove_dns
 from integration_fd import prove as prove_fd
 from integration_inode import prove as prove_inode
+from integration_io import prove as prove_io
 from integration_network import prove as prove_network
 from integration_oom import CGROUP as OOM_CGROUP
 from integration_oom import MISSING_CGROUP as OOM_MISSING_CGROUP
@@ -170,9 +171,25 @@ def main() -> None:
                 f"SELECT id::text FROM incidents WHERE id='{migration_id}' AND to_regclass('public.ingestion_checkpoints') IS NOT NULL;",
             ).strip()
             assert migration == migration_id
+            status_constraint = compose(
+                "exec",
+                "-T",
+                "postgres",
+                "psql",
+                "-U",
+                "fleetdoctor",
+                "-d",
+                "fleetdoctor",
+                "-Atc",
+                "SELECT conname||':'||pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='incidents'::regclass AND conname='incident_status_valid';",
+            ).strip()
+            assert "superseded" in status_constraint and status_constraint.startswith(
+                "incident_status_valid:"
+            )
             evidence["pre_task04_schema_migration"] = {
                 "incident_id_preserved": migration_id,
                 "checkpoint_table_created": True,
+                "ticket11_status_constraint": status_constraint,
             }
             stat: dict[str, int] = json.loads((ROOT / "tests/fixtures/statvfs.json").read_text())[
                 "reserved"
@@ -259,28 +276,53 @@ def main() -> None:
                 for panel in dashboard["dashboard"]["panels"]:
                     if panel["datasource"]["uid"] != "prometheus":
                         continue
-                    expr = panel["targets"][0]["expr"]
-                    unit = panel["fieldConfig"]["defaults"]["unit"]
-                    assert unit == (
-                        "bytes"
-                        if "bytes" in expr
-                        else "percentunit"
-                        if "_ratio" in expr
-                        or any(
-                            metric in expr
-                            for metric in (
-                                "fleetdoctor_dns_query_success",
-                                "fleetdoctor_dns_inconclusive",
-                                "fleetdoctor_dns_admission_capacity_available",
-                                "fleetdoctor_dns_admission_candidate_overflow",
-                            )
-                        )
-                        else "ops"
-                        if "_per_second" in expr
-                        else "s"
-                        if "seconds" in expr
-                        else "short"
+                    targets = panel["targets"]
+                    targets_to_check = (
+                        targets
+                        if any("fleetdoctor_io_" in item["expr"] for item in targets)
+                        else targets[:1]
                     )
+                    for target in targets_to_check:
+                        expr = target["expr"]
+                        unit = panel["fieldConfig"]["defaults"]["unit"]
+                        for override in panel["fieldConfig"].get("overrides", []):
+                            if override["matcher"] == {
+                                "id": "byFrameRefID",
+                                "options": target["refId"],
+                            }:
+                                unit = next(
+                                    (
+                                        item["value"]
+                                        for item in override["properties"]
+                                        if item["id"] == "unit"
+                                    ),
+                                    unit,
+                                )
+                        expected = (
+                            "Bps"
+                            if "_bytes_per_second" in expr
+                            else "bytes"
+                            if "bytes" in expr
+                            else "percentunit"
+                            if "_ratio" in expr
+                            or any(
+                                metric in expr
+                                for metric in (
+                                    "fleetdoctor_dns_query_success",
+                                    "fleetdoctor_dns_inconclusive",
+                                    "fleetdoctor_dns_admission_capacity_available",
+                                    "fleetdoctor_dns_admission_candidate_overflow",
+                                    "fleetdoctor_io_admission_capacity_available",
+                                    "fleetdoctor_io_admission_candidate_overflow",
+                                )
+                            )
+                            else "ops"
+                            if "_per_second" in expr
+                            else "s"
+                            if "seconds" in expr
+                            else "short"
+                        )
+                        assert unit == expected, (panel["title"], target["refId"], unit, expected)
             evidence["dashboard_uids"] = [
                 value["dashboard"]["uid"] for value in dashboards.values()
             ]
@@ -366,6 +408,8 @@ def main() -> None:
             prove_network(api, prom, values, compose, evidence["network_incidents"])
             evidence["dns_incidents"] = {}
             prove_dns(api, prom, values, compose, evidence["dns_incidents"])
+            evidence["io_incidents"] = {}
+            prove_io(api, prom, values, compose, evidence["io_incidents"])
             evidence["outage_and_replay"] = {}
             asyncio.run(prove_outage(api, prom, grafana, values, evidence["outage_and_replay"]))
             evidence["source_after"] = source_manifest()

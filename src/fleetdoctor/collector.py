@@ -39,17 +39,19 @@ from fleetdoctor.incidents import (
     DnsConfig,
     FdConfig,
     InodeConfig,
+    IoConfig,
     NetworkConfig,
     OomConfig,
 )
 from fleetdoctor.memory import validate_cgroup_paths
 from fleetdoctor.rules import (
     MAX_ACTIVE_DNS_RESOURCES,
+    MAX_ACTIVE_IO_RESOURCES,
     MAX_ACTIVE_NETWORK_RESOURCES,
     CompositeEvaluator,
     dns_evidence,
 )
-from fleetdoctor.schema import FIELDS, Sample, WorkloadMemoryObservation
+from fleetdoctor.schema import FIELDS, IoObservation, Sample, WorkloadMemoryObservation
 from fleetdoctor.store import IncidentStore, PostgresStore, StoreError, StoreSnapshot
 
 MAX_BODY = 65536
@@ -77,6 +79,18 @@ def usable_workload_memory(value: WorkloadMemoryObservation) -> bool:
     )
 
 
+def io_scope_coverage(value: IoObservation | None, *, fresh: bool) -> tuple[int, int]:
+    if value is None:
+        return 0, 0
+    configured = set(value.configured_scopes)
+    available: set[str] = set()
+    if fresh and value.status in ("available", "partial"):
+        for device in value.devices:
+            if device.status == "available" and device.rate_status == "available":
+                available.update(configured.intersection(device.scopes))
+    return len(configured), len(available)
+
+
 class State:
     def __init__(
         self,
@@ -91,6 +105,7 @@ class State:
         fd_config: FdConfig | None = None,
         network_config: NetworkConfig | None = None,
         dns_config: DnsConfig | None = None,
+        io_config: IoConfig | None = None,
         cgroup_paths: tuple[str, ...] = (),
     ) -> None:
         self.nodes, self.paths, self.clock = nodes, paths, clock
@@ -111,6 +126,7 @@ class State:
         self.oom_config, self.fd_config = oom_config or OomConfig(), fd_config or FdConfig()
         self.network_config = network_config or NetworkConfig()
         self.dns_config = dns_config or DnsConfig()
+        self.io_config = io_config or IoConfig()
         self.cgroup_paths = cgroup_paths
         snapshot = store.snapshot(set(nodes))
         self.evaluator = CompositeEvaluator(snapshot.active)
@@ -195,6 +211,7 @@ class State:
                 self.fd_config,
                 self.network_config,
                 self.dns_config,
+                self.io_config,
             )
             retired = list(self.retired[sample.node_id])
             if previous and identity != prev_identity:
@@ -249,6 +266,7 @@ class State:
                         "fd_pressure",
                         "network_path_degradation",
                         "dns_resolution_failure",
+                        "io_bottleneck",
                     )
                 }
                 if active is not None
@@ -259,6 +277,7 @@ class State:
             fd = sample.fd if sample else None
             network = sample.network if sample else None
             dns = sample.dns if sample else None
+            io = sample.io if sample else None
             fd_active_count = (
                 sum(i.node_id == node and i.rule == "fd_pressure" for i in active)
                 if active is not None
@@ -271,6 +290,11 @@ class State:
             )
             network_active_count = (
                 sum(i.node_id == node and i.rule == "network_path_degradation" for i in active)
+                if active is not None
+                else None
+            )
+            io_active_count = (
+                sum(i.node_id == node and i.rule == "io_bottleneck" for i in active)
                 if active is not None
                 else None
             )
@@ -291,6 +315,7 @@ class State:
                 if fresh and cpu is not None
                 else ["observation_not_fresh" if sample else "observation_unavailable"],
             }
+            io_configured_scopes, io_available_scopes = io_scope_coverage(io, fresh=fresh)
             return {
                 "node_id": node,
                 "observed_at": sample.observed_at if sample else None,
@@ -439,11 +464,35 @@ class State:
                     if fresh
                     else ["observation_not_fresh" if sample else "observation_unavailable"],
                 },
+                "io_coverage": {
+                    "collection": io.status if fresh and io is not None else "unavailable",
+                    "inventory_complete": bool(fresh and io is not None and io.inventory_complete),
+                    "configured_scopes": io_configured_scopes,
+                    "available_scopes": io_available_scopes,
+                    "observed": len(io.devices) if fresh and io is not None else 0,
+                    "available": sum(item.rate_status == "available" for item in io.devices)
+                    if fresh and io is not None
+                    else 0,
+                    "admission_capacity": (
+                        "unavailable"
+                        if io_active_count is None or io_active_count >= MAX_ACTIVE_IO_RESOURCES
+                        else (
+                            "overflow"
+                            if node in self.evaluator.io.admission_overflow_nodes
+                            else "available"
+                        )
+                    ),
+                    "candidate_overflow": node in self.evaluator.io.admission_overflow_nodes,
+                    "mapping_errors": io.mapping_errors if fresh and io is not None else {},
+                    "errors": io.errors
+                    if fresh and io is not None
+                    else ["observation_not_fresh" if sample else "observation_unavailable"],
+                },
                 "sample": sample.model_dump(
                     mode="json",
                     exclude=set()
                     if fresh
-                    else {"filesystems", "cpu", "memory", "fd", "network", "dns"},
+                    else {"filesystems", "cpu", "memory", "fd", "network", "dns", "io"},
                 )
                 if sample
                 else None,
@@ -457,6 +506,7 @@ class State:
                 if network is not None and fresh
                 else None,
                 "dns": dns.model_dump(mode="json") if dns is not None and fresh else None,
+                "io": io.model_dump(mode="json") if io is not None and fresh else None,
             }
 
     def fd_watch(self, node: str) -> WatchResponse:
@@ -507,6 +557,7 @@ def create_app(
     fd_config: FdConfig | None = None,
     network_config: NetworkConfig | None = None,
     dns_config: DnsConfig | None = None,
+    io_config: IoConfig | None = None,
     cgroup_paths: tuple[str, ...] = (),
 ) -> FastAPI:
     if not nodes or len(nodes) > 16 or any(len(v.get_secret_value()) < 32 for v in nodes.values()):
@@ -527,6 +578,7 @@ def create_app(
         fd_config or FdConfig(),
         network_config or NetworkConfig(),
         dns_config or DnsConfig(),
+        io_config or IoConfig(),
         cgroup_paths,
     )
     app = FastAPI(title="FleetDoctor", version="0.1.0")
@@ -562,6 +614,7 @@ def create_app(
             "fd_rule": state.fd_config.model_dump(),
             "network_rule": state.network_config.model_dump(),
             "dns_rule": state.dns_config.model_dump(),
+            "io_rule": state.io_config.model_dump(),
             "filesystems": list(paths),
             "cgroups": list(cgroup_paths),
             "cadence_seconds": 5,
@@ -664,9 +717,10 @@ def create_app(
             "fd_pressure",
             "network_path_degradation",
             "dns_resolution_failure",
+            "io_bottleneck",
         ]
         | None = None,
-        status: str | None = Query(None, pattern="^(active|resolved)$"),
+        status: str | None = Query(None, pattern="^(active|resolved|superseded)$"),
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = Query(25, ge=1, le=100),
@@ -1036,6 +1090,67 @@ def create_app(
             ["node"],
             registry=registry,
         )
+        io_labels = ["node", "device_slot", "mount_scope"]
+        io_latency_g = Gauge(
+            "fleetdoctor_io_completion_latency_seconds",
+            "Read/write completion time divided by completed requests for a fresh interval",
+            io_labels,
+            registry=registry,
+        )
+        io_outstanding_g = Gauge(
+            "fleetdoctor_io_average_outstanding",
+            "Weighted I/O milliseconds divided by interval milliseconds",
+            io_labels,
+            registry=registry,
+        )
+        io_read_bps_g = Gauge(
+            "fleetdoctor_io_read_bytes_per_second",
+            "Physical device sectors read times 512 divided by interval seconds",
+            io_labels,
+            registry=registry,
+        )
+        io_write_bps_g = Gauge(
+            "fleetdoctor_io_write_bytes_per_second",
+            "Physical device sectors written times 512 divided by interval seconds",
+            io_labels,
+            registry=registry,
+        )
+        io_completions_g = Gauge(
+            "fleetdoctor_io_completions_per_second",
+            "Read and write completions per interval second",
+            io_labels,
+            registry=registry,
+        )
+        io_inflight_g = Gauge(
+            "fleetdoctor_io_inflight",
+            "Instantaneous I/O requests in progress at the interval endpoint",
+            io_labels,
+            registry=registry,
+        )
+        io_coverage_g = Gauge(
+            "fleetdoctor_io_coverage_ratio",
+            "Fraction of configured I/O mappings with a fresh valid interval",
+            ["node"],
+            registry=registry,
+        )
+        io_admission_g = Gauge(
+            "fleetdoctor_io_admission_capacity_available",
+            "I/O incident admission capacity is available",
+            ["node"],
+            registry=registry,
+        )
+        io_overflow_g = Gauge(
+            "fleetdoctor_io_admission_candidate_overflow",
+            "Qualifying I/O candidates exceeded bounded pending or active admission",
+            ["node"],
+            registry=registry,
+        )
+        io_pressure_g = Gauge(
+            "fleetdoctor_io_pressure_some_avg10_ratio",
+            "Host or configured-cgroup PSI some avg10 as a ratio",
+            ["node", "scope"],
+            registry=registry,
+        )
         network_probe_gauges = {
             "loss_ratio": Gauge(
                 "fleetdoctor_network_probe_loss_ratio",
@@ -1256,6 +1371,40 @@ def create_app(
                 )
                 facts = dns_evidence(latest_sample, metric_config)
                 dns_inconclusive_g.labels(node).set(int(facts["dns_conclusive"] is not True))
+            io_coverage = view["io_coverage"]
+            io_coverage_g.labels(node).set(
+                io_coverage["available_scopes"] / io_coverage["configured_scopes"]
+                if view["fresh"] and io_coverage["configured_scopes"]
+                else 0
+            )
+            io_admission_g.labels(node).set(int(io_coverage["admission_capacity"] == "available"))
+            io_overflow_g.labels(node).set(int(io_coverage["candidate_overflow"]))
+            io_value = view["io"]
+            if io_value is not None:
+                configured_slots = {
+                    scope: f"io{index}" for index, scope in enumerate(io_value["configured_scopes"])
+                }
+                for device in io_value["devices"]:
+                    if device["rate_status"] != "available":
+                        continue
+                    for mount_scope in device["scopes"]:
+                        labels = (node, configured_slots[mount_scope], mount_scope)
+                        if device["completion_latency_ms"] is not None:
+                            io_latency_g.labels(*labels).set(device["completion_latency_ms"] / 1000)
+                        io_outstanding_g.labels(*labels).set(device["average_outstanding"])
+                        io_read_bps_g.labels(*labels).set(device["read_bytes_per_second"])
+                        io_write_bps_g.labels(*labels).set(device["write_bytes_per_second"])
+                        io_completions_g.labels(*labels).set(device["completions_per_second"])
+                        io_inflight_g.labels(*labels).set(device["counters"]["inflight"])
+                registered_pressure_scopes = set(io_value["registered_pressure_scopes"])
+                for pressure in io_value["pressure"]:
+                    if (
+                        pressure["status"] == "available"
+                        and pressure["scope"] in registered_pressure_scopes
+                    ):
+                        io_pressure_g.labels(node, pressure["scope"]).set(
+                            pressure["some"]["avg10"] / 100
+                        )
         return Response(
             generate_latest(registry), media_type="text/plain; version=0.0.4; charset=utf-8"
         )
@@ -1277,5 +1426,6 @@ def app_factory() -> FastAPI:
             os.getenv("FLEETDOCTOR_NETWORK_RULE", "{}")
         ),
         dns_config=DnsConfig.model_validate_json(os.getenv("FLEETDOCTOR_DNS_RULE", "{}")),
+        io_config=IoConfig.model_validate_json(os.getenv("FLEETDOCTOR_IO_RULE", "{}")),
         cgroup_paths=validate_cgroup_paths(os.getenv("FLEETDOCTOR_CGROUPS", "")),
     )

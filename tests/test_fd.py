@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ from uuid import UUID
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from io_payload_fixture import maximum_sample
 from pydantic import SecretStr, ValidationError
 
 from fleetdoctor import delivery
@@ -33,7 +35,7 @@ from fleetdoctor.fd import (
 from fleetdoctor.incidents import FdConfig, Incident
 from fleetdoctor.schema import (
     UNITS_V5,
-    UNITS_V6,
+    UNITS_V7,
     CpuObservation,
     Delivery,
     DnsBaselineObservation,
@@ -44,6 +46,11 @@ from fleetdoctor.schema import (
     FdProcessObservation,
     Filesystem,
     HostMemoryObservation,
+    IoCounters,
+    IoDeviceObservation,
+    IoObservation,
+    IoPressureObservation,
+    IoProcessObservation,
     MemoryObservation,
     NetworkObservation,
     NetworkProbeObservation,
@@ -853,6 +860,110 @@ def combined_payload_sample(host_errors: list[str]) -> Sample:
     )
 
 
+def maximum_io_payload() -> IoObservation:
+    before = IoCounters(
+        reads_completed=1,
+        sectors_read=2,
+        read_ms=10,
+        writes_completed=1,
+        sectors_written=2,
+        write_ms=10,
+        inflight=0,
+        io_ms=10,
+        weighted_io_ms=10,
+        discards_completed=0,
+        discard_sectors=0,
+        discard_ms=0,
+        flushes_completed=0,
+        flush_ms=0,
+    )
+    after = before.model_copy(
+        update={
+            "reads_completed": 2,
+            "sectors_read": 4,
+            "read_ms": 20,
+            "writes_completed": 2,
+            "sectors_written": 4,
+            "write_ms": 20,
+            "io_ms": 20,
+            "weighted_io_ms": 1010,
+        }
+    )
+    devices = []
+    scopes = [f"/io-{index}" for index in range(4)]
+    for index, scope in enumerate(scopes):
+        material: dict[str, str | int] = {
+            "major_minor": f"253:{index}",
+            "sysfs_path": f"/sys/devices/virtual/block/dm-{index}",
+            "diskseq": str(100 + index),
+            "dm_uuid": f"fleetdoctor-payload-{index}",
+            "filesystem_id": 1000 + index,
+        }
+        resource_id = (
+            "io:"
+            + hashlib.sha256(
+                json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()[:32]
+        )
+        devices.append(
+            IoDeviceObservation(
+                resource=resource_id,
+                status="available",
+                rate_status="available",
+                major_minor=str(material["major_minor"]),
+                device_name=f"dm-{index}",
+                sysfs_path=str(material["sysfs_path"]),
+                diskseq=str(material["diskseq"]),
+                dm_uuid=str(material["dm_uuid"]),
+                filesystem_id=int(material["filesystem_id"]),
+                scopes=[scope],
+                mount_ids={scope: 100 + index},
+                mount_namespace="mnt:[4026533000]",
+                counters=after,
+                counters_before=before,
+                elapsed_seconds=1,
+                completion_count=2,
+                completion_latency_ms=10,
+                average_outstanding=1,
+                read_bytes_per_second=1024,
+                write_bytes_per_second=1024,
+                completions_per_second=2,
+                confirmed_idle=False,
+            )
+        )
+    pressure_scopes = ["host", *[f"/workload/io-{index}" for index in range(8)]]
+    pressure = [
+        IoPressureObservation(scope=scope, status="unavailable", errors=["p" * 128] * 4)
+        for scope in pressure_scopes
+    ]
+    processes = [
+        IoProcessObservation(
+            pid=5000 + index,
+            starttime=6000 + index,
+            status="available",
+            rate_status="baseline",
+            physical_read_bytes=2**64 - 1,
+            physical_write_bytes=2**64 - 1,
+            logical_read_characters=2**64 - 1,
+            logical_write_characters=2**64 - 1,
+            cancelled_write_bytes=2**64 - 1,
+            net_write_balance_bytes=0,
+        )
+        for index in range(16)
+    ]
+    return IoObservation(
+        status="available",
+        inventory_complete=True,
+        configured_scopes=scopes,
+        devices=devices,
+        processes=processes,
+        process_coverage="complete",
+        registered_pressure_scopes=pressure_scopes,
+        pressure=pressure,
+        pressure_coverage="complete",
+    )
+
+
 def test_combined_payload_fallback_preserves_watched_statuses() -> None:
     value = combined_payload_sample(["m" * 1200] * 16)
     assert len(value.model_dump_json().encode()) > 65_536
@@ -1022,29 +1133,21 @@ def test_max_dns_baseline_and_delivery_envelope_preserve_dns_and_fd_watch_facts(
         retention_coverage="complete",
         context_trimmed=True,
     )
+    io = maximum_io_payload()
 
     def with_dns(errors: list[str]) -> Sample:
         raw = combined_payload_sample(errors).model_dump(mode="json")
         raw.update(
-            schema_version=6,
-            units=UNITS_V6,
+            schema_version=7,
+            units=UNITS_V7,
             network=network.model_dump(mode="json"),
             dns=dns.model_dump(mode="json"),
+            io=io.model_dump(mode="json"),
         )
         return Sample.model_validate(raw)
 
-    target_size = 65_530
-    host_errors = ["m" * 1200 for _ in range(16)]
-    initial = with_dns(host_errors)
-    to_remove = len(initial.model_dump_json().encode()) - target_size
-    assert 0 <= to_remove <= sum(len(error) - 1 for error in host_errors)
-    for index, error in enumerate(host_errors):
-        removed = min(to_remove, len(error) - 1)
-        host_errors[index] = error[:-removed] if removed else error
-        to_remove -= removed
-    assert to_remove == 0
-    value = with_dns(host_errors)
-    assert len(value.model_dump_json().encode()) == target_size
+    value = with_dns(["m"] * 16)
+    assert len(value.model_dump_json().encode()) > delivery.MAX_BODY
     bounded = payload_bounded_sample(value)
     assert bounded.dns == dns
     assert value.fd is not None
@@ -1057,10 +1160,29 @@ def test_max_dns_baseline_and_delivery_envelope_preserve_dns_and_fd_watch_facts(
     assert len(body) <= delivery.MAX_BODY
     decoded = Sample.model_validate_json(body)
     assert decoded.dns == dns
+    assert decoded.io is not None
+    assert decoded.io.registered_pressure_scopes == io.registered_pressure_scopes
+    assert [device.resource for device in decoded.io.devices] == [
+        device.resource for device in io.devices
+    ]
+    assert decoded.io.configured_scopes == io.configured_scopes
     assert (
         decoded.fd is not None
         and {item.identity.resource for item in decoded.fd.observations} == required
     )
+
+    combined_maximum = maximum_sample(dns, boot=BOOT, session=SESSION, observed_at=NOW)
+    combined_bounded = payload_bounded_sample(combined_maximum)
+    assert combined_bounded.io is not None and combined_bounded.io.context_trimmed
+    assert combined_bounded.io.process_coverage == "compacted"
+    assert combined_bounded.io.pressure_coverage == "compacted"
+    assert combined_bounded.io.registered_pressure_scopes == (
+        combined_maximum.io.registered_pressure_scopes  # type: ignore[union-attr]
+    )
+    assert [item.resource for item in combined_bounded.io.devices] == [
+        item.resource
+        for item in combined_maximum.io.devices  # type: ignore[union-attr]
+    ]
 
 
 def test_max_delivery_reservation_warns_only_when_actual_enqueue_drops(

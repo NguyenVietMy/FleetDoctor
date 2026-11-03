@@ -50,6 +50,14 @@ HISTORY_METRICS = {
     "dns_query_duration_seconds": "fleetdoctor_dns_query_duration_seconds",
     "dns_probe_coverage_ratio": "fleetdoctor_dns_probe_coverage_ratio",
     "dns_inconclusive": "fleetdoctor_dns_inconclusive",
+    "io_completion_latency_seconds": "fleetdoctor_io_completion_latency_seconds",
+    "io_average_outstanding": "fleetdoctor_io_average_outstanding",
+    "io_read_bytes_per_second": "fleetdoctor_io_read_bytes_per_second",
+    "io_write_bytes_per_second": "fleetdoctor_io_write_bytes_per_second",
+    "io_completions_per_second": "fleetdoctor_io_completions_per_second",
+    "io_inflight": "fleetdoctor_io_inflight",
+    "io_coverage_ratio": "fleetdoctor_io_coverage_ratio",
+    "io_pressure_some_avg10_ratio": "fleetdoctor_io_pressure_some_avg10_ratio",
 }
 
 

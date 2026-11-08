@@ -1,9 +1,12 @@
 """The versioned wire contract; missing observations are never zero-filled."""
 
+import hashlib
 import ipaddress
+import json
+import math
 import re
 from datetime import datetime
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
@@ -55,6 +58,18 @@ DNS_UNITS = {
     "dns_baseline_age": "seconds",
 }
 UNITS_V6 = {**UNITS_V5, **DNS_UNITS}
+IO_UNITS = {
+    "io_latency": "milliseconds",
+    "io_average_outstanding": "requests",
+    "io_counters": "count_and_milliseconds",
+    "io_throughput": "bytes_per_second",
+    "io_completion_rate": "completions_per_second",
+    "io_pressure_average": "percent",
+    "io_pressure_total": "microseconds",
+    "io_interval": "seconds",
+    "io_sectors": "512_bytes",
+}
+UNITS_V7 = {**UNITS_V6, **IO_UNITS}
 FIELDS = (
     "total_bytes",
     "free_bytes",
@@ -499,13 +514,13 @@ class WorkloadMemoryObservation(WireModel):
 
 class MemoryObservation(WireModel):
     host: HostMemoryObservation
-    workloads: list[WorkloadMemoryObservation] = Field(default_factory=list, max_length=4)
+    workloads: list[WorkloadMemoryObservation] = Field(default_factory=list, max_length=8)
     kernel_logs: list[KernelOomLog] = Field(default_factory=list, max_length=16)
     kernel_log_coverage: Literal[
         "baseline", "available", "permission_denied", "cursor_lost", "unavailable"
     ] = "unavailable"
     kernel_log_errors: list[str] = Field(default_factory=list, max_length=8)
-    workload_errors: dict[str, list[str]] = Field(default_factory=dict, max_length=4)
+    workload_errors: dict[str, list[str]] = Field(default_factory=dict, max_length=8)
 
     @model_validator(mode="after")
     def unique_workloads(self) -> Self:
@@ -966,8 +981,385 @@ class DnsObservation(WireModel):
         return self
 
 
+class IoCounters(WireModel):
+    reads_completed: Count
+    sectors_read: Count
+    read_ms: Count
+    writes_completed: Count
+    sectors_written: Count
+    write_ms: Count
+    inflight: Count
+    io_ms: Count
+    weighted_io_ms: Count
+    discards_completed: Count | None = None
+    discard_sectors: Count | None = None
+    discard_ms: Count | None = None
+    flushes_completed: Count | None = None
+    flush_ms: Count | None = None
+
+    @model_validator(mode="after")
+    def optional_groups(self) -> Self:
+        discard = (self.discards_completed, self.discard_sectors, self.discard_ms)
+        flush = (self.flushes_completed, self.flush_ms)
+        if any(value is not None for value in discard) and any(value is None for value in discard):
+            raise ValueError("discard counters must be complete or unavailable")
+        if any(value is not None for value in flush) and any(value is None for value in flush):
+            raise ValueError("flush counters must be complete or unavailable")
+        return self
+
+
+class IoDeviceObservation(WireModel):
+    resource: str = Field(pattern=r"^io:[0-9a-f]{32}$")
+    status: Literal["available", "unavailable"]
+    rate_status: Literal["available", "baseline", "reset", "unavailable"]
+    major_minor: str = Field(pattern=r"^[0-9]+:[0-9]+$", max_length=32)
+    device_name: str | None = Field(default=None, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$")
+    sysfs_path: str = Field(min_length=1, max_length=512)
+    diskseq: str | None = Field(default=None, max_length=64, pattern=r"^[0-9]+$")
+    dm_uuid: str | None = Field(default=None, max_length=256)
+    filesystem_id: int = Field(ge=0, le=2**64 - 1)
+    scopes: list[str] = Field(min_length=1, max_length=4)
+    mount_ids: dict[str, int] = Field(max_length=4)
+    mount_namespace: str = Field(min_length=1, max_length=128)
+    counters: IoCounters | None = None
+    counters_before: IoCounters | None = None
+    elapsed_seconds: float | None = Field(default=None, gt=0, le=10)
+    completion_count: Count | None = None
+    completion_latency_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    average_outstanding: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    read_bytes_per_second: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    write_bytes_per_second: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    completions_per_second: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    confirmed_idle: bool = False
+    errors: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def consistent_device(self) -> Self:
+        if self.scopes != sorted(set(self.scopes)) or set(self.mount_ids) != set(self.scopes):
+            raise ValueError("I/O scopes and mount IDs must be complete, unique and sorted")
+        if not self.diskseq and not self.dm_uuid:
+            raise ValueError("I/O device requires a stable binding")
+        fingerprint_material = {
+            "major_minor": self.major_minor,
+            "sysfs_path": self.sysfs_path,
+            "diskseq": self.diskseq,
+            "dm_uuid": self.dm_uuid,
+            "filesystem_id": self.filesystem_id,
+        }
+        expected_resource = (
+            "io:"
+            + hashlib.sha256(
+                json.dumps(fingerprint_material, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()[:32]
+        )
+        if self.resource != expected_resource:
+            raise ValueError("I/O durable resource fingerprint does not match its bindings")
+        derived = (
+            self.elapsed_seconds,
+            self.counters_before,
+            self.completion_count,
+            self.average_outstanding,
+            self.read_bytes_per_second,
+            self.write_bytes_per_second,
+            self.completions_per_second,
+        )
+        if self.status == "unavailable":
+            if (
+                self.rate_status != "unavailable"
+                or self.counters is not None
+                or any(value is not None for value in derived)
+                or self.completion_latency_ms is not None
+                or not self.errors
+            ):
+                raise ValueError("unavailable I/O device cannot carry measured counters")
+        else:
+            if self.counters is None:
+                raise ValueError("available I/O device requires counters")
+            if self.rate_status == "available":
+                if any(value is None for value in derived):
+                    raise ValueError("available I/O rate requires a complete interval")
+                if (self.completion_count == 0) != (self.completion_latency_ms is None):
+                    raise ValueError("I/O latency must be null exactly when completions are zero")
+                assert self.counters_before is not None
+                assert self.elapsed_seconds is not None
+                names = (
+                    "reads_completed",
+                    "sectors_read",
+                    "read_ms",
+                    "writes_completed",
+                    "sectors_written",
+                    "write_ms",
+                    "io_ms",
+                    "weighted_io_ms",
+                )
+                deltas: dict[str, int] = {}
+                for name in names:
+                    before = getattr(self.counters_before, name)
+                    after = getattr(self.counters, name)
+                    if after < before:
+                        raise ValueError("I/O interval crosses a counter reset")
+                    deltas[name] = after - before
+                completions = deltas["reads_completed"] + deltas["writes_completed"]
+                expected_latency = (
+                    (deltas["read_ms"] + deltas["write_ms"]) / completions if completions else None
+                )
+                expected = {
+                    "completion_count": completions,
+                    "completion_latency_ms": expected_latency,
+                    "average_outstanding": deltas["weighted_io_ms"] / (1000 * self.elapsed_seconds),
+                    "read_bytes_per_second": deltas["sectors_read"] * 512 / self.elapsed_seconds,
+                    "write_bytes_per_second": deltas["sectors_written"]
+                    * 512
+                    / self.elapsed_seconds,
+                    "completions_per_second": completions / self.elapsed_seconds,
+                }
+                for name, expected_value in expected.items():
+                    actual = getattr(self, name)
+                    if isinstance(expected_value, float):
+                        if actual is None or not math.isclose(
+                            actual, expected_value, rel_tol=1e-9, abs_tol=1e-9
+                        ):
+                            raise ValueError(f"I/O derived arithmetic mismatch: {name}")
+                    elif actual != expected_value:
+                        raise ValueError(f"I/O derived arithmetic mismatch: {name}")
+                optional_names = (
+                    "discards_completed",
+                    "discard_sectors",
+                    "discard_ms",
+                    "flushes_completed",
+                    "flush_ms",
+                )
+                optional_deltas: list[int] = []
+                optional_complete = True
+                for name in optional_names:
+                    before = getattr(self.counters_before, name)
+                    after = getattr(self.counters, name)
+                    if before is None or after is None:
+                        optional_complete = False
+                        continue
+                    if after < before:
+                        raise ValueError("I/O optional counter reset")
+                    optional_deltas.append(after - before)
+                expected_idle = bool(
+                    completions == 0
+                    and deltas["sectors_read"] == 0
+                    and deltas["sectors_written"] == 0
+                    and deltas["read_ms"] == 0
+                    and deltas["write_ms"] == 0
+                    and deltas["io_ms"] == 0
+                    and deltas["weighted_io_ms"] == 0
+                    and self.counters_before.inflight == 0
+                    and self.counters.inflight == 0
+                    and optional_complete
+                    and len(optional_deltas) == len(optional_names)
+                    and all(value == 0 for value in optional_deltas)
+                )
+                if self.confirmed_idle != expected_idle:
+                    raise ValueError("confirmed idle does not match raw endpoint activity")
+            elif (
+                any(value is not None for value in derived)
+                or self.completion_latency_ms is not None
+            ):
+                raise ValueError("non-rate I/O observation cannot carry interval metrics")
+        if self.confirmed_idle and (
+            self.rate_status != "available"
+            or self.completion_count != 0
+            or self.completion_latency_ms is not None
+            or self.counters is None
+            or self.counters.inflight != 0
+        ):
+            raise ValueError("confirmed idle requires a valid zero-completion interval")
+        if any(len(error) > 256 for error in self.errors):
+            raise ValueError("I/O collection error exceeds 256 characters")
+        return self
+
+
+class IoProcessObservation(WireModel):
+    pid: int = Field(ge=1, le=2**31 - 1, strict=True)
+    starttime: Count | None = None
+    status: Literal["available", "unavailable"]
+    rate_status: Literal["available", "baseline", "reset", "gap", "unavailable"]
+    physical_read_bytes: Count | None = None
+    physical_write_bytes: Count | None = None
+    physical_read_bytes_per_second: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    physical_write_bytes_per_second: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    logical_read_characters: Count | None = None
+    logical_write_characters: Count | None = None
+    cancelled_write_bytes: Count | None = None
+    net_write_balance_bytes: int | None = Field(
+        default=None, ge=-(2**64 - 1), le=2**64 - 1, strict=True
+    )
+    errors: list[str] = Field(default_factory=list, max_length=4)
+
+    @model_validator(mode="after")
+    def consistent_process_io(self) -> Self:
+        counters = (
+            self.physical_read_bytes,
+            self.physical_write_bytes,
+            self.logical_read_characters,
+            self.logical_write_characters,
+            self.cancelled_write_bytes,
+            self.net_write_balance_bytes,
+        )
+        rates = (self.physical_read_bytes_per_second, self.physical_write_bytes_per_second)
+        if self.status == "available":
+            if self.starttime is None or any(value is None for value in counters):
+                raise ValueError("available process I/O requires identity and distinct counters")
+            assert self.physical_write_bytes is not None
+            assert self.cancelled_write_bytes is not None
+            if self.net_write_balance_bytes != (
+                self.physical_write_bytes - self.cancelled_write_bytes
+            ):
+                raise ValueError("net write balance does not match raw counters")
+            if (self.rate_status == "available") != all(value is not None for value in rates):
+                raise ValueError("process I/O rate status and values disagree")
+        elif (
+            any(value is not None for value in counters + rates)
+            or self.starttime is not None
+            or not self.errors
+        ):
+            raise ValueError("unavailable process I/O requires only errors")
+        return self
+
+
+class IoPressureObservation(WireModel):
+    scope: str = Field(min_length=1, max_length=256)
+    status: Literal["available", "unavailable"]
+    some: dict[str, float | int] | None = Field(default=None, max_length=4)
+    full: dict[str, float | int] | None = Field(default=None, max_length=4)
+    errors: list[str] = Field(default_factory=list, max_length=4)
+
+    @field_validator("scope")
+    @classmethod
+    def pressure_scope_is_registered_label(cls, value: str) -> str:
+        if value == "host":
+            return value
+        if (
+            value == "/"
+            or not re.fullmatch(r"/[a-zA-Z0-9_.@/-]+", value)
+            or "//" in value
+            or any(part in ("", ".", "..") for part in value.split("/")[1:])
+        ):
+            raise ValueError("I/O pressure scope must be host or a canonical cgroup path")
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def bounded_raw_pressure_values(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        for name in ("some", "full"):
+            row = data.get(name)
+            if row is None or not isinstance(row, dict):
+                continue
+            if set(row) != {"avg10", "avg60", "avg300", "total"}:
+                raise ValueError("I/O pressure fields are incomplete")
+            total = row["total"]
+            if type(total) is not int or not 0 <= total <= 2**64 - 1:
+                raise ValueError("I/O pressure total must be unsigned64 microseconds")
+            for average_name in ("avg10", "avg60", "avg300"):
+                average = row[average_name]
+                if type(average) not in (int, float):
+                    raise ValueError("I/O pressure averages must be finite numbers")
+                if isinstance(average, float) and not math.isfinite(average):
+                    raise ValueError("I/O pressure averages must be finite numbers")
+                if not 0 <= average <= 100:
+                    raise ValueError("I/O pressure averages are percentages")
+        return data
+
+    @model_validator(mode="after")
+    def consistent_pressure(self) -> Self:
+        for row in (self.some, self.full):
+            if row is not None:
+                if set(row) != {"avg10", "avg60", "avg300", "total"}:
+                    raise ValueError("I/O pressure fields are incomplete")
+                if any(row[name] < 0 or row[name] > 100 for name in ("avg10", "avg60", "avg300")):
+                    raise ValueError("I/O pressure averages are percentages")
+        if self.status == "available" and (self.some is None or self.full is None):
+            raise ValueError("available I/O pressure requires some and full")
+        if self.status == "unavailable" and (
+            self.some is not None or self.full is not None or not self.errors
+        ):
+            raise ValueError("unavailable I/O pressure requires only errors")
+        return self
+
+
+class IoObservation(WireModel):
+    status: Literal["available", "partial", "unavailable", "disabled"]
+    inventory_complete: bool
+    configured_scopes: list[str] = Field(default_factory=list, max_length=4)
+    devices: list[IoDeviceObservation] = Field(default_factory=list, max_length=4)
+    processes: list[IoProcessObservation] = Field(default_factory=list, max_length=16)
+    process_coverage: Literal["complete", "compacted", "unavailable"] = "unavailable"
+    registered_pressure_scopes: list[str] = Field(default_factory=list, max_length=9)
+    pressure: list[IoPressureObservation] = Field(default_factory=list, max_length=9)
+    pressure_coverage: Literal["complete", "compacted", "unavailable"] = "unavailable"
+    context_trimmed: bool = False
+    mapping_errors: dict[str, str] = Field(default_factory=dict, max_length=4)
+    errors: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def consistent_io(self) -> Self:
+        if self.configured_scopes != sorted(set(self.configured_scopes)):
+            raise ValueError("configured I/O scopes must be unique and sorted")
+        if len({item.resource for item in self.devices}) != len(self.devices):
+            raise ValueError("duplicate I/O durable resource")
+        if len({item.pid for item in self.processes}) != len(self.processes):
+            raise ValueError("duplicate I/O process")
+        if len({item.scope for item in self.pressure}) != len(self.pressure):
+            raise ValueError("duplicate I/O pressure scope")
+        if len(set(self.registered_pressure_scopes)) != len(self.registered_pressure_scopes):
+            raise ValueError("duplicate registered I/O pressure scope")
+        expected_pressure_scopes = ["host", *sorted(self.registered_pressure_scopes[1:])]
+        if self.registered_pressure_scopes and (
+            self.registered_pressure_scopes[0] != "host"
+            or self.registered_pressure_scopes != expected_pressure_scopes
+        ):
+            raise ValueError("registered I/O pressure scopes must be host then sorted cgroups")
+        if self.pressure_coverage == "complete" and {item.scope for item in self.pressure} != set(
+            self.registered_pressure_scopes
+        ):
+            raise ValueError("I/O pressure coverage must match every registered scope")
+        if self.pressure_coverage != "complete" and self.pressure:
+            raise ValueError("non-complete I/O pressure coverage cannot carry records")
+        if self.context_trimmed != (
+            self.process_coverage == "compacted" or self.pressure_coverage == "compacted"
+        ):
+            raise ValueError("I/O context-trimmed flag and coverage disagree")
+        if self.context_trimmed and "payload_budget" not in self.errors:
+            raise ValueError("compacted I/O context requires payload budget evidence")
+        if set(self.mapping_errors) - set(self.configured_scopes):
+            raise ValueError("I/O mapping error outside configured scope")
+        if self.status == "disabled" and (
+            self.configured_scopes or self.devices or self.mapping_errors
+        ):
+            raise ValueError("disabled I/O collection cannot report configured mappings")
+        if self.status == "available" and (not self.inventory_complete or self.mapping_errors):
+            raise ValueError("available I/O collection requires complete mapping inventory")
+        if self.status == "unavailable" and self.inventory_complete:
+            raise ValueError("unavailable I/O collection cannot claim complete inventory")
+        scope_owners: dict[str, str] = {}
+        for device in self.devices:
+            for scope in device.scopes:
+                if scope in scope_owners:
+                    raise ValueError("configured I/O scope appears on multiple resources")
+                scope_owners[scope] = device.resource
+        covered = set(scope_owners) | set(self.mapping_errors)
+        if covered - set(self.configured_scopes):
+            raise ValueError("I/O inventory reports an unconfigured scope")
+        if self.inventory_complete and (
+            self.mapping_errors or set(scope_owners) != set(self.configured_scopes)
+        ):
+            raise ValueError(
+                "complete I/O inventory must cover every configured scope exactly once"
+            )
+        if len(self.model_dump_json().encode()) > 32768:
+            raise ValueError("I/O observation exceeds 32KiB")
+        return self
+
+
 class Sample(WireModel):
-    schema_version: Literal[1, 2, 3, 4, 5, 6]
+    schema_version: Literal[1, 2, 3, 4, 5, 6, 7]
     node_id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
     boot_id: UUID
     agent_session_id: UUID
@@ -980,6 +1372,7 @@ class Sample(WireModel):
     fd: FdObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     network: NetworkObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     dns: DnsObservation | None = Field(default=None, exclude_if=lambda value: value is None)
+    io: IoObservation | None = Field(default=None, exclude_if=lambda value: value is None)
     delivery: Delivery | None = None
 
     @field_validator("observed_at")
@@ -992,7 +1385,7 @@ class Sample(WireModel):
     @field_validator("units")
     @classmethod
     def exact_units(cls, value: dict[str, str]) -> dict[str, str]:
-        if value not in (UNITS, UNITS_V2, UNITS_V3, UNITS_V4, UNITS_V5, UNITS_V6):
+        if value not in (UNITS, UNITS_V2, UNITS_V3, UNITS_V4, UNITS_V5, UNITS_V6, UNITS_V7):
             raise ValueError("unsupported metric units")
         return value
 
@@ -1005,6 +1398,7 @@ class Sample(WireModel):
             or self.fd is not None
             or self.network is not None
             or self.dns is not None
+            or self.io is not None
         ):
             raise ValueError("schema v1 cannot contain CPU telemetry")
         if self.schema_version == 2 and (
@@ -1014,6 +1408,7 @@ class Sample(WireModel):
             or self.fd is not None
             or self.network is not None
             or self.dns is not None
+            or self.io is not None
         ):
             raise ValueError("schema v2 requires CPU telemetry and v2 units")
         if self.schema_version == 3 and (
@@ -1023,6 +1418,7 @@ class Sample(WireModel):
             or self.fd is not None
             or self.network is not None
             or self.dns is not None
+            or self.io is not None
         ):
             raise ValueError("schema v3 requires CPU and memory telemetry and v3 units")
         if self.schema_version == 4 and (
@@ -1032,6 +1428,7 @@ class Sample(WireModel):
             or self.fd is None
             or self.network is not None
             or self.dns is not None
+            or self.io is not None
         ):
             raise ValueError("schema v4 requires CPU, memory, FD telemetry and v4 units")
         if self.schema_version == 5 and (
@@ -1041,6 +1438,7 @@ class Sample(WireModel):
             or self.fd is None
             or self.network is None
             or self.dns is not None
+            or self.io is not None
         ):
             raise ValueError(
                 "schema v5 requires CPU, memory, FD and network telemetry and v5 units"
@@ -1055,6 +1453,20 @@ class Sample(WireModel):
         ):
             raise ValueError(
                 "schema v6 requires CPU, memory, FD, network and DNS telemetry and v6 units"
+            )
+        if self.schema_version == 6 and self.io is not None:
+            raise ValueError("schema v6 cannot contain I/O telemetry")
+        if self.schema_version == 7 and (
+            self.units != UNITS_V7
+            or self.cpu is None
+            or self.memory is None
+            or self.fd is None
+            or self.network is None
+            or self.dns is None
+            or self.io is None
+        ):
+            raise ValueError(
+                "schema v7 requires CPU, memory, FD, network, DNS and I/O telemetry and v7 units"
             )
         if self.fd is not None and any(
             item.identity.boot_id != self.boot_id

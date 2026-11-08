@@ -30,6 +30,7 @@ from fleetdoctor.fd import (
     WatchIdentity,
     WatchResponse,
 )
+from fleetdoctor.io import configured_io_mounts, configured_io_pids
 from fleetdoctor.memory import MemoryCollectionWorker, validate_cgroup_paths
 from fleetdoctor.network import NetworkCollectionWorker, configured_target
 from fleetdoctor.schema import (
@@ -39,12 +40,14 @@ from fleetdoctor.schema import (
     UNITS_V4,
     UNITS_V5,
     UNITS_V6,
+    UNITS_V7,
     CpuObservation,
     Delivery,
     DnsObservation,
     FdObservation,
     FdProcessObservation,
     Filesystem,
+    IoObservation,
     MemoryObservation,
     NetworkObservation,
     Sample,
@@ -82,7 +85,12 @@ def make_sample(
     fd: FdObservation | None = None,
     network: NetworkObservation | None = None,
     dns: DnsObservation | None = None,
+    io: IoObservation | None = None,
 ) -> Sample:
+    if io is not None and (
+        dns is None or network is None or fd is None or memory is None or cpu is None
+    ):
+        raise ValueError("schema v7 I/O samples require all schema v6 telemetry")
     if dns is not None and (network is None or fd is None or memory is None or cpu is None):
         raise ValueError("schema v6 DNS samples require CPU, memory, FD, and network telemetry")
     if network is not None and (fd is None or memory is None or cpu is None):
@@ -92,7 +100,9 @@ def make_sample(
     if memory is not None and cpu is None:
         raise ValueError("schema v3 memory samples require CPU telemetry")
     return Sample(
-        schema_version=6
+        schema_version=7
+        if io is not None
+        else 6
         if dns is not None
         else 5
         if network is not None
@@ -104,7 +114,9 @@ def make_sample(
         agent_session_id=session,
         sequence=sequence,
         observed_at=observed_at or datetime.now(UTC),
-        units=UNITS_V6
+        units=UNITS_V7
+        if io is not None
+        else UNITS_V6
         if dns is not None
         else UNITS_V5
         if network is not None
@@ -117,6 +129,7 @@ def make_sample(
         fd=fd,
         network=network,
         dns=dns,
+        io=io,
     )
 
 
@@ -219,6 +232,18 @@ def payload_bounded_sample(sample: Sample) -> Sample:
         errors=errors[:8],
     )
     compact = sample.model_copy(update={"fd": fd})
+    if _max_enveloped_payload_size(compact) <= MAX_BODY:
+        return compact
+    if compact.io is not None:
+        io = compact.io.model_copy(deep=True)
+        io.processes = []
+        io.pressure = []
+        io.process_coverage = "compacted"
+        io.pressure_coverage = "compacted"
+        io.context_trimmed = True
+        io.errors = [error for error in io.errors if error != "payload_budget"][:7]
+        io.errors.append("payload_budget")
+        compact = compact.model_copy(update={"io": io})
     if _max_enveloped_payload_size(compact) > MAX_BODY:
         raise PayloadTooLarge("required sample telemetry exceeds 64KiB")
     return compact
@@ -277,6 +302,8 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
             url, allow_loopback=os.getenv("FLEETDOCTOR_ALLOW_LOOPBACK_DNS_INGEST") == "1"
         )
     dns_history = DnsBaselineHistory()
+    io_mounts = configured_io_mounts(os.getenv("FLEETDOCTOR_IO_MOUNTS", ""))
+    io_pids = configured_io_pids(os.getenv("FLEETDOCTOR_IO_PIDS", ""))
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -301,6 +328,8 @@ async def run(node: str, url: str, token: SecretStr, paths: tuple[str, ...], onc
             dns_hostname=hostname,
             dns_history=dns_history,
             supervisor=supervisor,
+            io_mounts=io_mounts,
+            io_pids=io_pids,
         )
     finally:
         worker.close()
@@ -336,6 +365,8 @@ async def collect_loop(
     dns_hostname: str | None = None,
     dns_history: DnsBaselineHistory | None = None,
     supervisor: CollectionSupervisor | None = None,
+    io_mounts: tuple[str, ...] = (),
+    io_pids: tuple[int, ...] = (),
 ) -> None:
     """Also used by the service proof with an ordinary synthetic collection worker."""
     sequence = 0
@@ -382,6 +413,7 @@ async def collect_loop(
                 fd: FdObservation | None
                 network: NetworkObservation | None
                 dns: DnsObservation | None
+                io: IoObservation | None = None
                 if supervisor is not None:
                     supervisor_collection = asyncio.create_task(
                         asyncio.to_thread(
@@ -398,6 +430,8 @@ async def collect_loop(
                             watch_error,
                             network_target,
                             dns_hostname,
+                            io_mounts,
+                            io_pids,
                         )
                     )
                     try:
@@ -406,12 +440,13 @@ async def collect_loop(
                         await _drain_collection_tasks([supervisor_collection])
                         raise
                     filesystems = collected.filesystems
-                    cpu, memory, fd, network, dns = (
+                    cpu, memory, fd, network, dns, io = (
                         collected.cpu,
                         collected.memory,
                         collected.fd,
                         collected.network,
                         collected.dns,
+                        collected.io,
                     )
                 else:
                     filesystem_collection = asyncio.create_task(
@@ -494,6 +529,10 @@ async def collect_loop(
                     )
                     if dns_history is None:
                         dns_history = history
+                if io is not None and dns is None:
+                    dns = DnsObservation.unavailable(
+                        None, None, "dns_monitoring_disabled_for_schema_v7"
+                    )
                 sample = make_sample(
                     node,
                     boot,
@@ -506,6 +545,7 @@ async def collect_loop(
                     fd=fd,
                     network=network,
                     dns=dns,
+                    io=io,
                 )
                 enqueue_bounded_sample(queue, sample, datetime.now(UTC))
                 if once:

@@ -307,6 +307,96 @@ def test_allocator_gate_opens_only_after_exact_confinement_and_nonroot_identity(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX ownership and mode contract")
+@pytest.mark.parametrize("replace_after_open", [False, True])
+def test_trusted_state_retries_atomic_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replace_after_open: bool
+) -> None:
+    configure(tmp_path, monkeypatch)
+    token = "d" * 16
+    path = memory_resource.state_path(token)
+    record = {
+        "token": token,
+        "unit": memory_resource.unit_name(token),
+        "boot_id": "test-boot",
+        "script_sha256": "test-source",
+        "phase": "starting",
+    }
+    local_state_writer(tmp_path)(record)
+    prepared = record | {"phase": "prepared"}
+    original_open = os.open
+    publications: list[bool] = []
+
+    def publish() -> None:
+        replacement = path.with_suffix(".new")
+        replacement.write_text(json.dumps(prepared))
+        replacement.chmod(0o600)
+        os.replace(replacement, path)
+        publications.append(True)
+
+    def open_during_publication(candidate: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        should_publish = Path(candidate) == path and not publications
+        if should_publish and not replace_after_open:
+            publish()
+        descriptor = original_open(candidate, flags, *args, **kwargs)
+        if should_publish and replace_after_open:
+            publish()
+        return descriptor
+
+    monkeypatch.setattr(os, "open", open_during_publication)
+    assert memory_resource.trusted_state(token) == prepared
+    assert len(publications) == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership and mode contract")
+def test_trusted_state_bounds_atomic_publication_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configure(tmp_path, monkeypatch)
+    path = tmp_path / "state.json"
+    path.write_text("{}")
+    path.chmod(0o600)
+    original_open = os.open
+    publications: list[bool] = []
+
+    def always_replace(candidate: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if Path(candidate) == path:
+            replacement = path.with_suffix(".new")
+            replacement.write_text("{}")
+            replacement.chmod(0o600)
+            os.replace(replacement, path)
+            publications.append(True)
+        return original_open(candidate, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", always_replace)
+    with pytest.raises(ValueError, match="state changed repeatedly"):
+        memory_resource._trusted_file(path)
+    assert len(publications) == 3
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership and mode contract")
+@pytest.mark.parametrize("violation", ["permissions", "owner", "hardlink", "symlink"])
+def test_trusted_state_still_rejects_untrusted_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, violation: str
+) -> None:
+    configure(tmp_path, monkeypatch)
+    path = tmp_path / "state.json"
+    path.write_text("{}")
+    path.chmod(0o600)
+    if violation == "permissions":
+        path.chmod(0o644)
+    elif violation == "owner":
+        monkeypatch.setattr(memory_resource, "STATE_OWNER_UID", path.stat().st_uid + 1)
+    elif violation == "hardlink":
+        os.link(path, path.with_suffix(".link"))
+    else:
+        target = path.with_suffix(".target")
+        path.rename(target)
+        path.symlink_to(target)
+    with pytest.raises((ValueError, OSError)):
+        memory_resource._trusted_file(path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership and mode contract")
 def test_trusted_state_binds_root_file_boot_and_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

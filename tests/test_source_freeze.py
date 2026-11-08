@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 import source_freeze
 from lab import ROOT
-from source_freeze import aggregate_digest, validate_source_freeze
+from source_freeze import aggregate_digest, validate_source_freeze, write_current_inventory
 
 PLAN_HASH = "3" * 64
 
@@ -21,7 +21,15 @@ def inventory() -> dict[str, Any]:
         "base": "f91267d5be2db914088f3f3c34375346621eafc4",
         "head": "f91267d5be2db914088f3f3c34375346621eafc4",
         "tree": "70216499b0ae8c809025234de37911eefa2fe1be",
-        "files": [{"path": "README.md", "kind": "file", "sha256": "1" * 64}],
+        "files": [
+            {
+                "path": "README.md",
+                "kind": "file",
+                "sha256": "1" * 64,
+                "git_committed_sha256": "4" * 64,
+            }
+        ],
+        "working_tree_platform": "nt",
         "changed_files": ["README.md"],
         "diff_sha256": "2" * 64,
         "plan_sha256": PLAN_HASH,
@@ -57,8 +65,27 @@ def test_freeze_rejects_reviewed_file_drift_and_traversal(
         validate_source_freeze(path, PLAN_HASH)
 
     frozen = deepcopy(actual)
-    frozen["files"].append({"path": "../secret", "kind": "file", "sha256": "0" * 64})
+    frozen["files"].append(
+        {
+            "path": "../secret",
+            "kind": "file",
+            "sha256": "0" * 64,
+            "git_committed_sha256": None,
+        }
+    )
     frozen["sha256"] = aggregate_digest(frozen)
     write(tmp_path / "traversal.json", frozen)
     with pytest.raises(ValueError, match="path"):
         validate_source_freeze(tmp_path / "traversal.json", PLAN_HASH)
+
+
+def test_write_current_inventory_is_complete_and_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frozen = inventory()
+    monkeypatch.setattr(source_freeze, "current_inventory", lambda plan: deepcopy(frozen))
+    destination = tmp_path / "proof" / "source-freeze.json"
+    result = write_current_inventory(destination, PLAN_HASH)
+    assert result == frozen
+    assert json.loads(destination.read_text(encoding="utf-8")) == frozen
+    assert not list(destination.parent.glob(".*.tmp"))

@@ -142,6 +142,10 @@ def test_memory_parsers_units_unlimited_and_path_validation() -> None:
     assert parse_limit("max\n") == (None, True)
     assert parse_limit("0\n") == (0, False)
     assert validate_cgroup_paths(CGROUP) == (CGROUP,)
+    eight = tuple(f"/system.slice/workload-{index}.scope" for index in range(8))
+    assert validate_cgroup_paths(",".join(eight)) == eight
+    with pytest.raises(ValueError, match="at most eight"):
+        validate_cgroup_paths(",".join((*eight, "/system.slice/workload-8.scope")))
     for invalid in ("/", "relative", "/a/../b", "/a//b", ",/a", "/a,/a"):
         with pytest.raises(ValueError):
             validate_cgroup_paths(invalid)

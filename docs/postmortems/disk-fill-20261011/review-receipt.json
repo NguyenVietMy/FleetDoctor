@@ -1,0 +1,410 @@
+{
+  "schema_version": 1,
+  "reviewer": "coordinator/agent",
+  "reviewed_at": "2026-11-08T19:01:12.251806+00:00",
+  "owner_author_acceptance": "pending",
+  "incident_id": "ff8d91b8-69d7-4b12-a95f-98c5ab8e84fe",
+  "source_record_sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+  "draft_sha256": "4f1c0970ebc9880a93fe0c1f27186817a9ffa534040f5a4afe57db9b37d25a4c",
+  "evidence_sha256": "3c42428e8317b57b621be9f32dedc2e7704c5a96d6231bf2e21b8c34eeffa81d",
+  "actual_model": "claude-opus-5-5",
+  "claim_count": 45,
+  "validated_claim_citations": 122,
+  "all_projection_leaves_match_raw_sources": true,
+  "original_source_unchanged": true,
+  "measured_trigger_to_api_seconds": 10.187999999994645,
+  "measured_injection_to_api_seconds": 14.921999999991385,
+  "derived_cleanup_to_api_resolution_seconds": 11.484000000011292,
+  "private_record_contains_intermediate_samples_and_reference_node": true,
+  "reviewed_final_sha256": "e851618efebe96ab0f6d10b221c8a78e18f4810719acb05d7eb7207e31c01795",
+  "claim_dispositions": [
+    {
+      "claim_id": "symptoms:0",
+      "original_kind": "observed",
+      "original_text": "At the opening sample (sequence 16, observed 2026-10-11T23:38:27.903415Z) on node-a, filesystem /var/lib/fleetdoctor/chaos/disk reported block usage of 97.149%, above the configured 95.0% trigger.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "symptoms:1",
+      "original_kind": "observed",
+      "original_text": "Opening sample byte counts: 352,336,896 used of 366,869,504 total bytes, with 10,338,304 bytes available and 14,532,608 free.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "symptoms:2",
+      "original_kind": "observed",
+      "original_text": "Inode usage at opening was only 0.0122% (98,292 of 98,304 inodes free), so inode capacity was not under pressure.",
+      "assessment": "qualified",
+      "reason": "Retain the inode counters without turning interpretation into additional observed telemetry."
+    },
+    {
+      "claim_id": "symptoms:3",
+      "original_kind": "observed",
+      "original_text": "FleetDoctor raised rule disk_block_exhaustion with severity critical against resource /var/lib/fleetdoctor/chaos/disk on node-a.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "symptoms:4",
+      "original_kind": "observed",
+      "original_text": "Block telemetry coverage was 'available' with no coverage or filesystem errors in the opening sample.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "symptoms:5",
+      "original_kind": "missing",
+      "original_text": "No application-level symptoms are in the evidence, such as write failures, ENOSPC errors, or service impact. Only statvfs-style capacity counters were recorded.",
+      "assessment": "qualified",
+      "reason": "Missing application-impact facts refer to this compact input, not absence of all historical records."
+    },
+    {
+      "claim_id": "timeline:0",
+      "original_kind": "observed",
+      "original_text": "23:38:12.903035Z — Agent baseline sample (sequence 13) showed the chaos filesystem at 0.00395% block usage (14,336 bytes used).",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:1",
+      "original_kind": "observed",
+      "original_text": "23:38:13.523622Z to 23:38:14.631799Z — Harness test-setup events: preparation started, injector started at 23:38:14.185501Z, preparation completed, and injection started. These are test-setup records, not FleetDoctor attribution.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:2",
+      "original_kind": "observed",
+      "original_text": "23:38:17.897974Z — First agent sample above the trigger (sequence 14) showed 97.149% block usage.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:3",
+      "original_kind": "observed",
+      "original_text": "23:38:19.550052Z — The harness recorded the threshold as observed.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:4",
+      "original_kind": "observed",
+      "original_text": "23:38:27.921129Z — FleetDoctor opened the incident, based on the opening sample (sequence 16) observed at 23:38:27.903415Z.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:5",
+      "original_kind": "inference",
+      "original_text": "The incident probably opened after three consecutive over-threshold samples (sequences 14, 15 and 16), which matches the consecutive_samples=3 setting and a cadence of about 5 seconds. Sequence 15 itself is not in the evidence.",
+      "assessment": "qualified",
+      "reason": "Record configured three-sample window; do not reconstruct omitted intermediate samples from selected snapshots alone."
+    },
+    {
+      "claim_id": "timeline:6",
+      "original_kind": "observed",
+      "original_text": "23:38:29.738769Z — The harness recorded the diagnosis as visible through the API.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:7",
+      "original_kind": "observed",
+      "original_text": "23:38:32.355640Z — Injector cleanup attempt 1 reported cleanup_complete=true. The harness recorded cleanup_complete at 23:38:33.401023Z.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:8",
+      "original_kind": "observed",
+      "original_text": "23:38:42.904099Z — Latest sample (sequence 19) showed 0.00395% block usage. FleetDoctor marked the incident resolved at 23:38:42.921877Z.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:9",
+      "original_kind": "observed",
+      "original_text": "23:38:44.886463Z — The harness recorded the resolution as visible through the API. The scenario finished at 23:38:44.923046Z.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:10",
+      "original_kind": "observed",
+      "original_text": "The harness measured 14.922 s from injection to diagnosis and 10.188 s from trigger to diagnosis.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "timeline:11",
+      "original_kind": "missing",
+      "original_text": "Samples 15, 17 and 18 are not in the evidence, so the exact moment usage fell below the 90% recovery threshold is unknown.",
+      "assessment": "qualified",
+      "reason": "Intermediate polls are omitted from the model-facing projection and remain in the retained private source."
+    },
+    {
+      "claim_id": "diagnosis:0",
+      "original_kind": "observed",
+      "original_text": "FleetDoctor's recorded diagnosis: \"Filesystem /var/lib/fleetdoctor/chaos/disk has exhausted workload block space\".",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "diagnosis:1",
+      "original_kind": "inference",
+      "original_text": "The counters support block-space exhaustion rather than inode exhaustion. Block usage was about 97% while inode usage stayed near 0.01%.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "diagnosis:2",
+      "original_kind": "observed",
+      "original_text": "FleetDoctor's own investigation guidance says the writer PID and file path cannot be obtained from statvfs telemetry.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "diagnosis:3",
+      "original_kind": "missing",
+      "original_text": "FleetDoctor telemetry does not identify which process or file consumed the space. The injector's worker PID, filler inode and backing file describe the test setup and must not be read as FleetDoctor attribution of a culprit.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "diagnosis:4",
+      "original_kind": "observed",
+      "original_text": "The harness graded the scenario 'passed', with expected and actual diagnosis both disk_block_exhaustion for scenario disk_fill. This is a harness measurement, not proof of root cause.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "diagnosis:5",
+      "original_kind": "missing",
+      "original_text": "There is no record that the recommended investigation steps were run (df, findmnt, du, lsof +L1). Remote command output was omitted from the evidence bundle.",
+      "assessment": "qualified",
+      "reason": "Suggested investigation steps are not execution evidence; commands omitted from compact input are retained privately."
+    },
+    {
+      "claim_id": "evidence:0",
+      "original_kind": "observed",
+      "original_text": "The opening and latest samples share the same boot_id and agent_session_id, so no reboot or agent restart is indicated during the incident.",
+      "assessment": "qualified",
+      "reason": "Selected snapshots share identities; omit a global assertion about every intervening event."
+    },
+    {
+      "claim_id": "evidence:1",
+      "original_kind": "observed",
+      "original_text": "Total filesystem size stayed at 366,869,504 bytes from opening to latest sample.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "evidence:2",
+      "original_kind": "inference",
+      "original_text": "Because total size did not change, recovery most likely came from data being removed, not from capacity being added.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "evidence:3",
+      "original_kind": "observed",
+      "original_text": "The root filesystem '/' stayed at about 11.03% block usage in the trigger sample, so the condition was limited to the chaos mount.",
+      "assessment": "qualified",
+      "reason": "Healthy monitored root mount does not establish the state of every filesystem or fleet-wide impact."
+    },
+    {
+      "claim_id": "evidence:4",
+      "original_kind": "observed",
+      "original_text": "Injector setup metadata maps the target mount to /dev/loop0 (ext4, maj:min 7:0), backed by an image file under /var/lib/fleetdoctor/chaos. This describes the test setup only.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "evidence:5",
+      "original_kind": "observed",
+      "original_text": "The top-level injector record shows cleanup_complete=false, while cleanup attempt 1 shows cleanup_complete=true.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "evidence:6",
+      "original_kind": "inference",
+      "original_text": "The top-level injector record is probably a snapshot from injection time, with the cleanup attempt result superseding it.",
+      "assessment": "qualified",
+      "reason": "Use the terminal cleanup receipt while retaining the original injector snapshot unchanged."
+    },
+    {
+      "claim_id": "evidence:7",
+      "original_kind": "observed",
+      "original_text": "The harness recorded no scenario errors.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "evidence:8",
+      "original_kind": "missing",
+      "original_text": "The evidence bundle omits polls, source, remote_commands and token data. Intermediate samples between sequences 14 and 19 are absent, apart from 16.",
+      "assessment": "corrected",
+      "reason": "Compact-projection omissions are not absences from the full private record."
+    },
+    {
+      "claim_id": "evidence:9",
+      "original_kind": "missing",
+      "original_text": "The scenario names node-b as the reference node, but no node-b telemetry is included, so no comparison was possible.",
+      "assessment": "corrected",
+      "reason": "Reference-node polls are present in the private record, but outside the compact model input and this limited example."
+    },
+    {
+      "claim_id": "recovery:0",
+      "original_kind": "observed",
+      "original_text": "The latest sample (sequence 19) showed 14,336 bytes used (0.00395%) with 362,660,864 bytes available, well below the 90.0% recovery threshold.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "recovery:1",
+      "original_kind": "observed",
+      "original_text": "The incident status is resolved. resolved_at, evaluated_at and updated_at are all 2026-10-11T23:38:42.921877Z.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "recovery:2",
+      "original_kind": "observed",
+      "original_text": "Injector cleanup attempt 1 completed at 23:38:32.355640Z, before the recovered sample.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "recovery:3",
+      "original_kind": "inference",
+      "original_text": "Used bytes returned exactly to the pre-injection baseline of 14,336 shortly after harness cleanup. This timing is consistent with cleanup removing the consumed space, but FleetDoctor telemetry does not itself establish that cause.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "recovery:4",
+      "original_kind": "missing",
+      "original_text": "There is no record of operator or FleetDoctor remediation, and no confirmation of how many below-threshold samples were needed before resolution.",
+      "assessment": "corrected",
+      "reason": "The configured sample count is known to be three; the compact projection does not independently reconstruct every qualifying sample."
+    },
+    {
+      "claim_id": "lessons:0",
+      "original_kind": "inference",
+      "original_text": "About 10 s passed from the first over-threshold sample to diagnosis, which matches 3 consecutive samples at roughly 5 s intervals. Teams should treat consecutive_samples × cadence as the minimum detection latency when tuning.",
+      "assessment": "corrected",
+      "reason": "Three nominal five-second samples span (3-1)*5=10 seconds after the first qualifying sample; count*cadence is not a universal minimum latency."
+    },
+    {
+      "claim_id": "lessons:1",
+      "original_kind": "inference",
+      "original_text": "API visibility lagged incident open by about 1.8 s and resolution by about 2.0 s. This should be accounted for in alerting SLOs.",
+      "assessment": "omitted",
+      "reason": "Cross-host UTC differences do not establish calibrated visibility latency or an alerting SLO."
+    },
+    {
+      "claim_id": "lessons:2",
+      "original_kind": "inference",
+      "original_text": "Harness intervals come from monotonic clocks: injection-to-diagnosis is 14.922 s, while the UTC timestamps differ by about 15.107 s. Postmortems should state which clock they use.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "lessons:3",
+      "original_kind": "inference",
+      "original_text": "statvfs telemetry cannot attribute a writer process or path. If culprit identification is required, another data source is needed, such as running the listed du/lsof steps or per-process I/O accounting.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "lessons:4",
+      "original_kind": "inference",
+      "original_text": "Tooling should read cleanup status from the latest cleanup attempt, not the top-level injector snapshot, because the two disagree.",
+      "assessment": "retained_or_condensed",
+      "reason": "Checked recorded values, scope, source class and inference/missing labels against the retained input."
+    },
+    {
+      "claim_id": "lessons:5",
+      "original_kind": "missing",
+      "original_text": "Evidence bundles should keep every intermediate sample and the output of the recommended investigation commands. That would allow threshold crossings and remediation actions to be audited.",
+      "assessment": "reclassified",
+      "reason": "Preservation and additional investigation are proposals; the original raw record is already retained privately."
+    }
+  ],
+  "limits": [
+    "Agent review is not owner author acceptance.",
+    "Historical single-run example, not new AWS execution or five-run calibration.",
+    "Private original record and raw model envelope remain external; compact published evidence carries logical provenance and hashes."
+  ],
+  "historical_projection_review": {
+    "reviewed_at": "2026-11-08T19:21:16.717035+00:00",
+    "original_generator_module_sha256": "c6740194d37c75500b33e3fff6899c49644470c38c27c0955f276ca0b4e47bda",
+    "original_omissions_list_is_complete": false,
+    "source_top_level_fields_not_projected": [
+      "configuration",
+      "diagnosis_timeout_seconds",
+      "environment",
+      "incident_id",
+      "injection_attempted",
+      "local_lease",
+      "max_injection_seconds",
+      "opening_detail",
+      "original_resource",
+      "poll_interval_seconds",
+      "polls",
+      "preparation_timeout_seconds",
+      "recovery_condition",
+      "recovery_timeout_seconds",
+      "remote_commands",
+      "resource_mappings",
+      "schema_version",
+      "source",
+      "token",
+      "trigger_condition",
+      "trigger_timeout_seconds"
+    ],
+    "source_top_level_fields_missing_from_original_omissions_list": [
+      "configuration",
+      "diagnosis_timeout_seconds",
+      "environment",
+      "incident_id",
+      "injection_attempted",
+      "local_lease",
+      "max_injection_seconds",
+      "opening_detail",
+      "original_resource",
+      "poll_interval_seconds",
+      "preparation_timeout_seconds",
+      "recovery_condition",
+      "recovery_timeout_seconds",
+      "resource_mappings",
+      "schema_version",
+      "trigger_condition",
+      "trigger_timeout_seconds"
+    ],
+    "selected_snapshot_relocated_to_incident": "resolved_detail",
+    "selected_snapshot_view_fields_not_projected": [
+      "evidence_age_seconds",
+      "evidence_available",
+      "evidence_fresh",
+      "evidence_stale"
+    ],
+    "omissions_are_not_redaction": true,
+    "root_ownership_token_is_retained_at": [
+      "/scenario/injector/token",
+      "/scenario/cleanup_attempts/0/result/token"
+    ],
+    "cadence_seconds": {
+      "value": 5,
+      "source_class": "harness_measurement",
+      "artifact": "scenario-record.json",
+      "pointer": "/configuration/cadence_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100"
+    },
+    "legacy_rendering_artifact": "Original draft retains escaped numeric apostrophe entities emitted by the earlier renderer; reviewed-final is readable and the generator has been corrected.",
+    "preservation": "Original generated draft.md, evidence.json and model-usage.json were not rewritten. No model regeneration occurred for the corrected generator."
+  }
+}

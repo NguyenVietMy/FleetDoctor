@@ -14,6 +14,7 @@ CMD ["/app/.venv/bin/uvicorn", "fleetdoctor.collector:app_factory", "--factory",
 FROM base AS test
 USER root
 COPY tests ./tests
+COPY docs/postmortems ./docs/postmortems
 COPY scripts ./scripts
 COPY deploy ./deploy
 COPY infra ./infra

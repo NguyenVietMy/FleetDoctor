@@ -1,0 +1,1767 @@
+{
+  "attribution_limits": [
+    "Scenario and injector metadata describe test setup, not FleetDoctor diagnosis attribution.",
+    "A source pointer does not prove a sole culprit or telemetry-derived process/path identity."
+  ],
+  "incident": {
+    "configuration": {
+      "consecutive_samples": 3,
+      "max_gap_seconds": 10.0,
+      "recovery_percent": 90.0,
+      "severity": "critical",
+      "trigger_percent": 95.0
+    },
+    "diagnosis": "Filesystem /var/lib/fleetdoctor/chaos/disk has exhausted workload block space",
+    "evaluated_at": "2026-10-11T23:38:42.921877Z",
+    "id": "ff8d91b8-69d7-4b12-a95f-98c5ab8e84fe",
+    "investigation_steps": [
+      "Check df -B1 -- /var/lib/fleetdoctor/chaos/disk and df -i -- /var/lib/fleetdoctor/chaos/disk",
+      "Verify the mount/device identity with findmnt before changing files",
+      "Inspect known workload directories with du; check deleted open files with lsof +L1",
+      "Remove only owned expendable data or expand capacity; confirm fresh usage below recovery threshold",
+      "Writer PID and file path are unavailable from statvfs telemetry"
+    ],
+    "latest_evidence": {
+      "agent_session_id": "329d46bf-d7d2-4168-b427-6a31081dae6c",
+      "block_available": true,
+      "boot_id": "32d320a2-ee99-4765-af4c-042ca25cdf10",
+      "coverage": {
+        "block": "available",
+        "errors": []
+      },
+      "filesystem": {
+        "available_bytes": 362660864,
+        "block_usage_percent": 0.003952848168278393,
+        "errors": [],
+        "free_bytes": 366855168,
+        "inode_usage_percent": 0.011189778645833334,
+        "inodes_free": 98293,
+        "inodes_total": 98304,
+        "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+        "total_bytes": 366869504,
+        "used_bytes": 14336
+      },
+      "node_id": "node-a",
+      "observed_at": "2026-10-11T23:38:42.904099+00:00",
+      "sequence": 19
+    },
+    "node_id": "node-a",
+    "observed_at": "2026-10-11T23:38:42.904099Z",
+    "opened_at": "2026-10-11T23:38:27.921129Z",
+    "opening_evidence": {
+      "agent_session_id": "329d46bf-d7d2-4168-b427-6a31081dae6c",
+      "block_available": true,
+      "boot_id": "32d320a2-ee99-4765-af4c-042ca25cdf10",
+      "coverage": {
+        "block": "available",
+        "errors": []
+      },
+      "filesystem": {
+        "available_bytes": 10338304,
+        "block_usage_percent": 97.14943177807581,
+        "errors": [],
+        "free_bytes": 14532608,
+        "inode_usage_percent": 0.01220703125,
+        "inodes_free": 98292,
+        "inodes_total": 98304,
+        "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+        "total_bytes": 366869504,
+        "used_bytes": 352336896
+      },
+      "node_id": "node-a",
+      "observed_at": "2026-10-11T23:38:27.903415+00:00",
+      "sequence": 16
+    },
+    "resolved_at": "2026-10-11T23:38:42.921877Z",
+    "resource": "/var/lib/fleetdoctor/chaos/disk",
+    "rule": "disk_block_exhaustion",
+    "severity": "critical",
+    "status": "resolved",
+    "updated_at": "2026-10-11T23:38:42.921877Z"
+  },
+  "omissions": [
+    "polls",
+    "source",
+    "remote_commands",
+    "token"
+  ],
+  "provenance": {
+    "/incident/configuration/consecutive_samples": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/configuration/consecutive_samples",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/configuration/max_gap_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/configuration/max_gap_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/configuration/recovery_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/configuration/recovery_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/configuration/severity": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/configuration/severity",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/configuration/trigger_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/configuration/trigger_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/diagnosis": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/diagnosis",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/evaluated_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/evaluated_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/investigation_steps/0": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/investigation_steps/0",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/investigation_steps/1": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/investigation_steps/1",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/investigation_steps/2": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/investigation_steps/2",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/investigation_steps/3": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/investigation_steps/3",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/investigation_steps/4": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/investigation_steps/4",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/agent_session_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/agent_session_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/block_available": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/block_available",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/boot_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/boot_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/coverage/block": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/coverage/block",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/coverage/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/coverage/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/filesystem/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/filesystem/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/node_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/node_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/observed_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/observed_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/latest_evidence/sequence": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/latest_evidence/sequence",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/node_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/node_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/observed_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/observed_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opened_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opened_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/agent_session_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/agent_session_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/block_available": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/block_available",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/boot_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/boot_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/coverage/block": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/coverage/block",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/coverage/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/coverage/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/filesystem/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/filesystem/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/node_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/node_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/observed_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/observed_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/opening_evidence/sequence": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/opening_evidence/sequence",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/resolved_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/resolved_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/resource": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/resource",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/rule": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/rule",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/severity": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/severity",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/status": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/status",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/incident/updated_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resolved_detail/updated_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "collector_incident"
+    },
+    "/scenario/actual_diagnosis": {
+      "artifact": "scenario-record.json",
+      "pointer": "/actual_diagnosis",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/cleanup_attempts/0/attempt": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/attempt",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/boot_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/boot_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/cleanup_complete": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/cleanup_complete",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/cleanup_utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/cleanup_utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/filler_inode": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/filler_inode",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/mapping/backing_file": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/mapping/backing_file",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/mapping/f_fsid": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/mapping/f_fsid",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/mapping/fstype": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/mapping/fstype",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/mapping/maj:min": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/mapping/maj:min",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/mapping/mount_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/mapping/mount_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/mapping/source": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/mapping/source",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/mapping/target": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/mapping/target",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/max_duration_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/max_duration_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/started_utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/started_utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/token": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/token",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/watchdog_pid": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/watchdog_pid",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/worker_pid": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/worker_pid",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/cleanup_attempts/0/result/worker_start": {
+      "artifact": "scenario-record.json",
+      "pointer": "/cleanup_attempts/0/result/worker_start",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/api_diagnosis/monotonic_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/api_diagnosis/monotonic_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/api_diagnosis/utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/api_diagnosis/utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/api_resolution/monotonic_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/api_resolution/monotonic_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/api_resolution/utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/api_resolution/utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/cleanup_complete/monotonic_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/cleanup_complete/monotonic_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/cleanup_complete/utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/cleanup_complete/utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/finished/monotonic_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/finished/monotonic_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/finished/utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/finished/utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/injection_start/monotonic_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/injection_start/monotonic_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/injection_start/utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/injection_start/utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/preparation_complete/monotonic_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/preparation_complete/monotonic_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/preparation_complete/utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/preparation_complete/utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/preparation_start/monotonic_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/preparation_start/monotonic_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/preparation_start/utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/preparation_start/utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/threshold_observed/monotonic_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/threshold_observed/monotonic_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/events/threshold_observed/utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/events/threshold_observed/utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/expected_diagnosis": {
+      "artifact": "scenario-record.json",
+      "pointer": "/expected_diagnosis",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/injection_to_diagnosis_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injection_to_diagnosis_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/injector/boot_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/boot_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/cleanup_complete": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/cleanup_complete",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/filler_inode": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/filler_inode",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/mapping/backing_file": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/mapping/backing_file",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/mapping/f_fsid": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/mapping/f_fsid",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/mapping/fstype": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/mapping/fstype",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/mapping/maj:min": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/mapping/maj:min",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/mapping/mount_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/mapping/mount_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/mapping/source": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/mapping/source",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/mapping/target": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/mapping/target",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/max_duration_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/max_duration_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/started_utc": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/started_utc",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/token": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/token",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/watchdog_pid": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/watchdog_pid",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/worker_pid": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/worker_pid",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/injector/worker_start": {
+      "artifact": "scenario-record.json",
+      "pointer": "/injector/worker_start",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_injector"
+    },
+    "/scenario/original_observation/agent_session_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/agent_session_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/boot_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/boot_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystem/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystem/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/0/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/0/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/filesystems/1/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/filesystems/1/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/node_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/node_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/observed_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/observed_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/schema_version": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/schema_version",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/sequence": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/sequence",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/units/inodes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/units/inodes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/units/observation_time": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/units/observation_time",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/units/space": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/units/space",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/original_observation/units/usage": {
+      "artifact": "scenario-record.json",
+      "pointer": "/original_observation/units/usage",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/agent_session_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/agent_session_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/boot_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/boot_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystem/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystem/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/0/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/0/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/filesystems/1/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/filesystems/1/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/node_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/node_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/observed_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/observed_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/schema_version": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/schema_version",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/sequence": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/sequence",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/units/inodes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/units/inodes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/units/observation_time": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/units/observation_time",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/units/space": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/units/space",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/recovery_observation/units/usage": {
+      "artifact": "scenario-record.json",
+      "pointer": "/recovery_observation/units/usage",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/reference": {
+      "artifact": "scenario-record.json",
+      "pointer": "/reference",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/resource": {
+      "artifact": "scenario-record.json",
+      "pointer": "/resource",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/scenario": {
+      "artifact": "scenario-record.json",
+      "pointer": "/scenario",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/status": {
+      "artifact": "scenario-record.json",
+      "pointer": "/status",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/target": {
+      "artifact": "scenario-record.json",
+      "pointer": "/target",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    },
+    "/scenario/trigger_observation/agent_session_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/agent_session_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/boot_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/boot_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystem/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystem/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/0/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/0/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/available_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/available_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/block_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/block_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/errors": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/errors",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/free_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/free_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/inode_usage_percent": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/inode_usage_percent",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/inodes_free": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/inodes_free",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/inodes_total": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/inodes_total",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/mountpoint": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/mountpoint",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/total_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/total_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/filesystems/1/used_bytes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/filesystems/1/used_bytes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/node_id": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/node_id",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/observed_at": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/observed_at",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/schema_version": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/schema_version",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/sequence": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/sequence",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/units/inodes": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/units/inodes",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/units/observation_time": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/units/observation_time",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/units/space": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/units/space",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_observation/units/usage": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_observation/units/usage",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "agent_observation"
+    },
+    "/scenario/trigger_to_diagnosis_seconds": {
+      "artifact": "scenario-record.json",
+      "pointer": "/trigger_to_diagnosis_seconds",
+      "sha256": "2ada9a2dfbf8983f9b4e37c5b96beaa7208cf546ceecd68835984babb4b7c100",
+      "source_class": "harness_measurement"
+    }
+  },
+  "scenario": {
+    "actual_diagnosis": "disk_block_exhaustion",
+    "cleanup_attempts": [
+      {
+        "attempt": 1,
+        "result": {
+          "boot_id": "32d320a2-ee99-4765-af4c-042ca25cdf10",
+          "cleanup_complete": true,
+          "cleanup_utc": "2026-10-11T23:38:32.355640+00:00",
+          "filler_inode": 12,
+          "mapping": {
+            "backing_file": "/var/lib/fleetdoctor/chaos/disk-875739131ae9477ea34e52dfe427e441.img",
+            "f_fsid": 15869802243859453704,
+            "fstype": "ext4",
+            "maj:min": "7:0",
+            "mount_id": "598",
+            "source": "/dev/loop0",
+            "target": "/var/lib/fleetdoctor/chaos/disk"
+          },
+          "max_duration_seconds": 180,
+          "started_utc": "2026-10-11T23:38:14.185501+00:00",
+          "token": "eae75a3d8d8941cfbcc6589fe4626895",
+          "watchdog_pid": 2792,
+          "worker_pid": 2793,
+          "worker_start": "25496"
+        }
+      }
+    ],
+    "errors": [],
+    "events": {
+      "api_diagnosis": {
+        "monotonic_seconds": 84213.484,
+        "utc": "2026-10-11T23:38:29.738769+00:00"
+      },
+      "api_resolution": {
+        "monotonic_seconds": 84228.812,
+        "utc": "2026-10-11T23:38:44.886463+00:00"
+      },
+      "cleanup_complete": {
+        "monotonic_seconds": 84217.328,
+        "utc": "2026-10-11T23:38:33.401023+00:00"
+      },
+      "finished": {
+        "monotonic_seconds": 84228.843,
+        "utc": "2026-10-11T23:38:44.923046+00:00"
+      },
+      "injection_start": {
+        "monotonic_seconds": 84198.562,
+        "utc": "2026-10-11T23:38:14.631799+00:00"
+      },
+      "preparation_complete": {
+        "monotonic_seconds": 84198.531,
+        "utc": "2026-10-11T23:38:14.610919+00:00"
+      },
+      "preparation_start": {
+        "monotonic_seconds": 84197.453,
+        "utc": "2026-10-11T23:38:13.523622+00:00"
+      },
+      "threshold_observed": {
+        "monotonic_seconds": 84203.296,
+        "utc": "2026-10-11T23:38:19.550052+00:00"
+      }
+    },
+    "expected_diagnosis": "disk_block_exhaustion",
+    "injection_to_diagnosis_seconds": 14.921999999991385,
+    "injector": {
+      "boot_id": "32d320a2-ee99-4765-af4c-042ca25cdf10",
+      "cleanup_complete": false,
+      "filler_inode": 12,
+      "mapping": {
+        "backing_file": "/var/lib/fleetdoctor/chaos/disk-875739131ae9477ea34e52dfe427e441.img",
+        "f_fsid": 15869802243859453704,
+        "fstype": "ext4",
+        "maj:min": "7:0",
+        "mount_id": "598",
+        "source": "/dev/loop0",
+        "target": "/var/lib/fleetdoctor/chaos/disk"
+      },
+      "max_duration_seconds": 180,
+      "started_utc": "2026-10-11T23:38:14.185501+00:00",
+      "token": "eae75a3d8d8941cfbcc6589fe4626895",
+      "watchdog_pid": 2792,
+      "worker_pid": 2793,
+      "worker_start": "25496"
+    },
+    "original_observation": {
+      "agent_session_id": "329d46bf-d7d2-4168-b427-6a31081dae6c",
+      "boot_id": "32d320a2-ee99-4765-af4c-042ca25cdf10",
+      "filesystem": {
+        "available_bytes": 362660864,
+        "block_usage_percent": 0.003952848168278393,
+        "errors": [],
+        "free_bytes": 366855168,
+        "inode_usage_percent": 0.011189778645833334,
+        "inodes_free": 98293,
+        "inodes_total": 98304,
+        "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+        "total_bytes": 366869504,
+        "used_bytes": 14336
+      },
+      "filesystems": [
+        {
+          "available_bytes": 19035914240,
+          "block_usage_percent": 11.02685807897088,
+          "errors": [],
+          "free_bytes": 19035914240,
+          "inode_usage_percent": 0.5354331940907398,
+          "inodes_free": 10423441,
+          "inodes_total": 10479552,
+          "mountpoint": "/",
+          "total_bytes": 21395124224,
+          "used_bytes": 2359209984
+        },
+        {
+          "available_bytes": 362660864,
+          "block_usage_percent": 0.003952848168278393,
+          "errors": [],
+          "free_bytes": 366855168,
+          "inode_usage_percent": 0.011189778645833334,
+          "inodes_free": 98293,
+          "inodes_total": 98304,
+          "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+          "total_bytes": 366869504,
+          "used_bytes": 14336
+        }
+      ],
+      "node_id": "node-a",
+      "observed_at": "2026-10-11T23:38:12.903035Z",
+      "schema_version": 1,
+      "sequence": 13,
+      "units": {
+        "inodes": "count",
+        "observation_time": "UTC",
+        "space": "bytes",
+        "usage": "percent"
+      }
+    },
+    "recovery_observation": {
+      "agent_session_id": "329d46bf-d7d2-4168-b427-6a31081dae6c",
+      "boot_id": "32d320a2-ee99-4765-af4c-042ca25cdf10",
+      "filesystem": {
+        "available_bytes": 362660864,
+        "block_usage_percent": 0.003952848168278393,
+        "errors": [],
+        "free_bytes": 366855168,
+        "inode_usage_percent": 0.011189778645833334,
+        "inodes_free": 98293,
+        "inodes_total": 98304,
+        "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+        "total_bytes": 366869504,
+        "used_bytes": 14336
+      },
+      "filesystems": [
+        {
+          "available_bytes": 19034861568,
+          "block_usage_percent": 11.031778228015023,
+          "errors": [],
+          "free_bytes": 19034861568,
+          "inode_usage_percent": 0.5354522788760435,
+          "inodes_free": 10423439,
+          "inodes_total": 10479552,
+          "mountpoint": "/",
+          "total_bytes": 21395124224,
+          "used_bytes": 2360262656
+        },
+        {
+          "available_bytes": 362660864,
+          "block_usage_percent": 0.003952848168278393,
+          "errors": [],
+          "free_bytes": 366855168,
+          "inode_usage_percent": 0.011189778645833334,
+          "inodes_free": 98293,
+          "inodes_total": 98304,
+          "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+          "total_bytes": 366869504,
+          "used_bytes": 14336
+        }
+      ],
+      "node_id": "node-a",
+      "observed_at": "2026-10-11T23:38:42.904099Z",
+      "schema_version": 1,
+      "sequence": 19,
+      "units": {
+        "inodes": "count",
+        "observation_time": "UTC",
+        "space": "bytes",
+        "usage": "percent"
+      }
+    },
+    "reference": "node-b",
+    "resource": "/var/lib/fleetdoctor/chaos/disk",
+    "scenario": "disk_fill",
+    "status": "passed",
+    "target": "node-a",
+    "trigger_observation": {
+      "agent_session_id": "329d46bf-d7d2-4168-b427-6a31081dae6c",
+      "boot_id": "32d320a2-ee99-4765-af4c-042ca25cdf10",
+      "filesystem": {
+        "available_bytes": 10338304,
+        "block_usage_percent": 97.14943177807581,
+        "errors": [],
+        "free_bytes": 14532608,
+        "inode_usage_percent": 0.01220703125,
+        "inodes_free": 98292,
+        "inodes_total": 98304,
+        "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+        "total_bytes": 366869504,
+        "used_bytes": 352336896
+      },
+      "filesystems": [
+        {
+          "available_bytes": 19035865088,
+          "block_usage_percent": 11.0270878135566,
+          "errors": [],
+          "free_bytes": 19035865088,
+          "inode_usage_percent": 0.5354618212686955,
+          "inodes_free": 10423438,
+          "inodes_total": 10479552,
+          "mountpoint": "/",
+          "total_bytes": 21395124224,
+          "used_bytes": 2359259136
+        },
+        {
+          "available_bytes": 10338304,
+          "block_usage_percent": 97.14943177807581,
+          "errors": [],
+          "free_bytes": 14532608,
+          "inode_usage_percent": 0.01220703125,
+          "inodes_free": 98292,
+          "inodes_total": 98304,
+          "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+          "total_bytes": 366869504,
+          "used_bytes": 352336896
+        }
+      ],
+      "node_id": "node-a",
+      "observed_at": "2026-10-11T23:38:17.897974Z",
+      "schema_version": 1,
+      "sequence": 14,
+      "units": {
+        "inodes": "count",
+        "observation_time": "UTC",
+        "space": "bytes",
+        "usage": "percent"
+      }
+    },
+    "trigger_to_diagnosis_seconds": 10.187999999994645
+  },
+  "schema_version": 1
+}

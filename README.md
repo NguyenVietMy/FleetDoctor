@@ -1,6 +1,6 @@
 # FleetDoctor
 
-Ticket11 adds schema-v7 configured-device I/O telemetry and a durable `io_bottleneck` lifecycle while preserving schema v1-v6. See the [I/O runbook](docs/io-bottleneck.md) and [Ticket11 evidence status](docs/task11-evidence.md). DNS and network remain separately documented in their existing runbooks.
+Ticket12 adds an offline, evidence-linked postmortem drafter without changing monitoring, diagnosis, or storage. See the [drafting guide](docs/postmortem-drafting.md), [actual Claude disk draft](docs/postmortems/disk-fill-20261011/draft.md), [agent-reviewed result pending owner acceptance](docs/postmortems/disk-fill-20261011/reviewed-final.md), and [Ticket12 evidence status](docs/task12-evidence.md). Ticket11's I/O lifecycle remains documented in the [I/O runbook](docs/io-bottleneck.md).
 
 FleetDoctor monitors a small Linux fleet and produces evidence-supported resource diagnoses. **Tasks 01 and 02 implement filesystem collection, healthy-fleet visibility and durable disk incident lifecycle.** Task02 passed local checks and two AWS functional lifecycles on 2026-10-11; see [Task02 evidence](docs/task02-evidence.md) for the frozen inspection record and verification limits. Task03 adds bounded outage delivery and reporting. Task04 adds durable bounded ingestion checkpoints and restart recovery; [Task04 evidence](docs/task04-evidence.md) separates builder proof from independent and live gates. Task05 adds strict v2 host CPU telemetry and CPU saturation. Task06 adds strict v3 host/workload memory telemetry and a generation-scoped workload-OOM lifecycle; see the [OOM runbook](docs/workload-oom.md) and [Task06 evidence status](docs/task06-evidence.md). Task07 adds inode exhaustion with an inode-specific lifecycle, bounded owned helper, and native ext4 proof; see the [inode runbook](docs/inode-exhaustion.md) and [Task07 evidence status](docs/task07-evidence.md). Task08 adds strict v4 process FD pressure, durable exact-identity watches, and a pidfd-only bounded helper; see the [FD runbook](docs/fd-pressure.md) and [Task08 evidence status](docs/task08-evidence.md). The [PRD](<FleetDoctor PRD.md>) owns the full project's requirements.
 
@@ -33,6 +33,7 @@ uv run python scripts/inode_helper_integration.py --output <external-path>/inode
 uv run python scripts/fd_helper_integration.py --output <external-path>/fd-native.json
 uv run python scripts/network_helper_integration.py --output <external-path>/network-native.json
 uv run python scripts/dns_helper_integration.py --output <external-path>/dns-native.json
+uv run python -m fleetdoctor.postmortem --help
 # Native Linux/WSL only; deliberately limited and not a saturation claim:
 uv run python scripts/cpu_smoke.py --workers 2 --seconds 5 --output <external-path>/cpu-smoke.json
 # Root Linux with systemd+cgroup v2 and Docker; real bounded kernel OOM:
@@ -54,7 +55,9 @@ uv sync --locked --all-extras
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy src tests scripts
+uv run pytest -q tests/test_postmortem.py
 uv run pytest
+uv run python -m fleetdoctor.postmortem --help
 uv run python -c "import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns"
 terraform -chdir=infra/aws fmt -check
 terraform -chdir=infra/aws init -backend=false -lockfile=readonly
@@ -69,7 +72,11 @@ sudo $(command -v uv) run python scripts/oom_helper_integration.py --output <ext
 sudo $(command -v uv) run python scripts/oom_smoke.py --output <external-path>/oom-smoke.json
 ```
 
-Static checking targets Linux. Fixture tests also run on Windows; isolated Docker checks exercise the complete root/nonroot Linux suites and native helpers. The DNS proof uses an owned authoritative server plus the actual direct-resolver and systemd-resolved adapters and removes only uniquely named resources. The I/O proof uses an owned loop/ext4/dm-delay resource and the production agent under actual systemd. These proofs do not claim AWS calibration, the five-run scenario gate, a healthy hour, overhead acceptance, or rendered-dashboard approval. Eight diagnosis types, including I/O bottlenecks, are implemented locally; postmortem drafting and workload traces remain later tickets.
+Static checking targets Linux. Fixture tests also run on Windows; isolated Docker checks exercise the complete root/nonroot Linux suites and native helpers. The DNS proof uses an owned authoritative server plus the actual direct-resolver and systemd-resolved adapters and removes only uniquely named resources. The I/O proof uses an owned loop/ext4/dm-delay resource and the production agent under actual systemd. These proofs do not claim AWS calibration, the five-run scenario gate, a healthy hour, overhead acceptance, or rendered-dashboard approval. Eight diagnosis types, including I/O bottlenecks, are implemented locally. Ticket12 fixture drafting makes zero model calls; it is not the required actual Claude example or owner-reviewed final. Workload traces remain a later ticket.
+
+## Evidence-linked postmortem drafting
+
+`fleetdoctor-postmortem` (or `python -m fleetdoctor.postmortem`) reads saved JSON only and writes one new output bundle. It never queries the live API/database or changes an incident. The fixture backend is deterministic and makes no model call; the Claude backend uses the owner's existing Claude subscription with tools, MCP, settings sources, Chrome, permission prompts, and session persistence disabled. Read the [drafting guide](docs/postmortem-drafting.md) for strict input layouts, output files, model/cost boundaries, and the historical disk example command.
 
 ## File-descriptor pressure diagnosis
 

@@ -4,7 +4,7 @@
 
 **Blocked by:** 14: Full CI validation
 
-**Status:** ready-for-agent
+**Status:** blocked; not started. The listed blocking verification/investigation tickets are not complete.
 
 - [ ] Freeze code/rules and record the lab manifest; execute five runs per scenario across both monitored nodes, one fault at a time, for 40 measured runs.
 - [ ] Every run must identify the correct node/resource, retain evidence, clean up, and resolve from fresh healthy observations within the declared timeouts.

@@ -4,7 +4,7 @@
 
 **Blocked by:** 15: Chaos measurement validation
 
-**Status:** ready-for-agent
+**Status:** blocked; not started. The listed blocking verification/investigation tickets are not complete.
 
 - [ ] Generate at least one actual model draft for each of the eight scenarios from its measured incident and scenario record.
 - [ ] Retain immutable input snapshots, evidence references, model identifiers, generated drafts, and reviewed final postmortems.

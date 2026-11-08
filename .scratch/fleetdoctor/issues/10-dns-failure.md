@@ -4,8 +4,12 @@
 
 **Blocked by:** 09: Network degradation
 
-**Status:** ready-for-agent
+**Status:** merged in [PR #9](https://github.com/NguyenVietMy/FleetDoctor/pull/9); implementation delivered. Remaining validation is recorded below.
 
-- [ ] Perform bounded uncached queries through the node's configured resolver for a baseline-confirmed hostname; retain nameservers, timing, and errors.
-- [ ] Implement the PRD DNS windows and evidence. Show inconclusive DNS evidence when direct-IP reachability also fails, and keep ingestion addressed by private IP.
-- [ ] Save and restore resolver state, including interrupted runs; demonstrate diagnosis and recovery through API/Grafana and add probe/rule/API checks plus a DNS runbook.
+- [x] Perform bounded uncached queries through the node's configured resolver for a baseline-confirmed hostname; retain nameservers, timing, and errors.
+- [x] Implement the PRD DNS windows and evidence. Show inconclusive DNS evidence when direct-IP reachability also fails, and keep ingestion addressed by private IP.
+- [x] Save and restore resolver state, including interrupted runs; demonstrate diagnosis and recovery through API/Grafana and add probe/rule/API checks plus a DNS runbook.
+
+**Verified scope:** Fixture/service and native resolver/restoration CI, including direct-resolver and systemd-resolved coverage; AWS deployment and calibration remain separate.
+
+**Evidence:** [Task10 handoff record](../../../docs/task10-evidence.md), [current delivery and CI status](../../../docs/delivery-status.md).

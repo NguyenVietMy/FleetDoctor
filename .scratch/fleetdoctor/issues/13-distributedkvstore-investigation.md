@@ -4,7 +4,7 @@
 
 **Blocked by:** 05: CPU saturation; 06: Workload OOM; 08: FD pressure; 09: Network degradation; 11: I/O bottleneck
 
-**Status:** ready-for-agent
+**Status:** ready-for-agent; not started. The implementation blockers are merged; this ticket has not been accepted.
 
 - [ ] Run the existing supported topology within the three-VM lab and monitor its configured processes/resources. Record revision, placement/shared-host limits, workload, and successful read/write outputs.
 - [ ] Retain timestamped strace and tcpdump captures, tool versions, and corresponding CPU/memory/FD/disk-I/O/network metric ranges.

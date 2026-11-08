@@ -1,5 +1,11 @@
 # Task07 evidence status
 
+**Delivery status checked 2026-11-08:** implementation merged in [PR #6](https://github.com/NguyenVietMy/FleetDoctor/pull/6). See [current delivery/CI status and remaining gates](delivery-status.md) and the [ticket checklist](../.scratch/fleetdoctor/issues/07-inode-exhaustion.md).
+
+## Historical handoff record
+
+The text below retains the original builder/coordinator handoff and its source-bound limits. Statements there about unrun publication or CI describe that earlier assignment; use the dated delivery status above for merge/CI status. Those later results do not grant AWS, rendered-dashboard or owner acceptance.
+
 Task07 implements a distinct typed inode-exhaustion rule, effective block disambiguation, heterogeneous durable lifecycle/reload/reconciliation, API/history/Prometheus/Grafana surfaces, a bounded inode helper with shared disk exclusion and independent watchdog, a measured harness, operations documentation and CI gates.
 
 Evidence is separated by role and environment:

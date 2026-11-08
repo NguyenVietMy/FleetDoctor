@@ -4,7 +4,7 @@
 
 **Blocked by:** 13: DistributedKVStore investigation
 
-**Status:** ready-for-agent
+**Status:** blocked; not started. The listed blocking verification/investigation tickets are not complete.
 
 - [ ] Verify successful read/write outputs, documented supported topology/revision, configured process placement, and setup/cleanup records.
 - [ ] Confirm strace and tcpdump captures are usable, timestamped, and support the cited flow; check corresponding FleetDoctor metric ranges.

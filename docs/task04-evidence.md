@@ -1,5 +1,11 @@
 # Task04 evidence status
 
+**Delivery status checked 2026-11-08:** implementation merged in [PR #3](https://github.com/NguyenVietMy/FleetDoctor/pull/3). See [current delivery/CI status and remaining gates](delivery-status.md) and the [ticket checklist](../.scratch/fleetdoctor/issues/04-durable-ingestion-and-restart-recovery.md).
+
+## Historical handoff record
+
+The text below retains the original builder/coordinator handoff and its source-bound limits. Statements there about unrun publication or CI describe that earlier assignment; use the dated delivery status above for merge/CI status. Those later results do not grant AWS, rendered-dashboard or owner acceptance.
+
 Task04 implementation began 2026-10-13 from baseline `f91267d5be2db914088f3f3c34375346621eafc4`, tree `70216499b0ae8c809025234de37911eefa2fe1be`. The approved external plan SHA256 is `311b7f1e6227c25485dd20ed2a215a3592dc40256dc7f624255a2aaff1f4a372`.
 
 Builder-local implementation adds bounded per-node ingestion checkpoints, atomic incident/checkpoint transactions, restart recovery without restored live gauges or pending windows, retained committed-retry duplicate semantics, strict negotiated acknowledgements with legacy fallback, pre-Task04 migration and checkpoint ACL handling, and source-bound deploy/restart drivers. The live restart driver uses the existing disk harness ownership and watchdogs with a 240-second maximum, 80-second reserve, 70-second callback deadline and 45-second readiness limit. It contains no production fault switch.

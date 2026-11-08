@@ -1,5 +1,13 @@
 # Ticket12 evidence status
 
+**Delivery status checked 2026-11-08:** implementation merged in [PR #11](https://github.com/NguyenVietMy/FleetDoctor/pull/11). See [current delivery/CI status and remaining gates](delivery-status.md) and the [ticket checklist](../.scratch/fleetdoctor/issues/12-postmortem-drafting.md).
+
+**Owner (author) acceptance remains pending.** The original example and its historical qualifications are preserved.
+
+## Historical handoff record
+
+The text below retains the original builder/coordinator handoff and its source-bound limits. Statements there about unrun publication or CI describe that earlier assignment; use the dated delivery status above for merge/CI status. Those later results do not grant AWS, rendered-dashboard or owner acceptance.
+
 Ticket12 source adds a standalone saved-record postmortem command, strict incident/scenario consistency checks, compact provenance-linked evidence, fixed structured response validation, a deterministic safe Markdown renderer, immutable terminal bundles, and bounded fixture/Claude adapters. Monitoring, collector, rules, agent, and storage source are unchanged.
 
 Builder proof is recorded externally in `C:/Users/VietM/.fleetdoctor/task12-20261108-131445/build1.json`; it is builder evidence, not independent verification. CI uses fixtures and fake processes only and must not authenticate to or invoke a real model. A passing fixture is not an actual model example.

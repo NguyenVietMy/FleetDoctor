@@ -1,5 +1,11 @@
 # Task08 evidence status
 
+**Delivery status checked 2026-11-08:** implementation merged in [PR #7](https://github.com/NguyenVietMy/FleetDoctor/pull/7). See [current delivery/CI status and remaining gates](delivery-status.md) and the [ticket checklist](../.scratch/fleetdoctor/issues/08-fd-pressure.md).
+
+## Historical handoff record
+
+The text below retains the original builder/coordinator handoff and its source-bound limits. Statements there about unrun publication or CI describe that earlier assignment; use the dated delivery status above for merge/CI status. Those later results do not grant AWS, rendered-dashboard or owner acceptance.
+
 Task08 implements strict schema-v4 file-descriptor collection, exact boot/PID/start-time identity, bounded configured/top/watch selection, monotonic growth evidence, durable typed `fd_pressure` lifecycle and watch recovery, API/history/Prometheus/Grafana surfaces, a pidfd-only bounded helper, production harness, operations documentation, and CI gates.
 
 Evidence is separated by role and environment:

@@ -1,5 +1,11 @@
 # Task03 evidence status
 
+**Delivery status checked 2026-11-08:** implementation merged in [PR #2](https://github.com/NguyenVietMy/FleetDoctor/pull/2). See [current delivery/CI status and remaining gates](delivery-status.md) and the [ticket checklist](../.scratch/fleetdoctor/issues/03-outage-and-replay-handling.md).
+
+## Historical handoff record
+
+The text below retains the original builder/coordinator handoff and its source-bound limits. Statements there about unrun publication or CI describe that earlier assignment; use the dated delivery status above for merge/CI status. Those later results do not grant AWS, rendered-dashboard or owner acceptance.
+
 Task03 implementation began 2026-10-12 on `feat/task-03-outage-and-replay`, baseline `210ec676e22ee26c8813fe77537e21e4970afb1f`. The approved external plan SHA256 is `08046c8279c82b42027c36838146568f2c14e2e0429666c940be23d633f3eafd`; Task02 agent compatibility was confirmed by the user before build.
 
 The builder records actual commands, runtime, passing/failed proof paths and limitations in `C:/Users/VietM/.fleetdoctor/task03-20261012-201845/build-round1.json`. Failed attempts retain separate external filenames. The agreed service proof command remains `uv run python scripts/integration.py --output <unique-external-output.json>` and includes the production-agent outage scenario. It uses ordinary synthetic filesystem observations against isolated real services. Privileged Linux disk proof is a separate command and cannot be inferred from service results.

@@ -1,8 +1,14 @@
 # Task09 evidence status
 
+**Delivery status checked 2026-11-08:** implementation merged in [PR #8](https://github.com/NguyenVietMy/FleetDoctor/pull/8). See [current delivery/CI status and remaining gates](delivery-status.md) and the [ticket checklist](../.scratch/fleetdoctor/issues/09-network-degradation.md).
+
+## Historical handoff record
+
+The text below retains the original builder/coordinator handoff and its source-bound limits. Statements there about unrun publication or CI describe that earlier assignment; use the dated delivery status above for merge/CI status. Those later results do not grant AWS, rendered-dashboard or owner acceptance.
+
 Task09 implements schema-v5 direct-IPv4 network collection, sustained and durable network-path incidents, fixed history and bounded Prometheus surfaces, Fleet/Node Grafana panels, service preparation, a root-only ICMP netem helper, a measured two-profile harness, local proof commands, documentation and CI wiring.
 
-## Current builder handoff
+## Builder handoff at delivery
 
 The final builder source remains based on `920e16f7d2b1f50cd73951897c355356a8e70e52` and the approved round-five plan at SHA-256 `0c8108a7ca193ef81efa060daec39f5953f8c4dc68a8cc1cee6d135179bba044`. The builder did not commit, publish, deploy, use AWS/SSH, or run remote CI.
 

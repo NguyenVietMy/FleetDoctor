@@ -4,7 +4,7 @@
 
 **Blocked by:** 16: Healthy baseline and agent overhead; 17: Postmortem verification; 18: KV tracing verification
 
-**Status:** ready-for-agent
+**Status:** blocked; not started. The listed blocking verification/investigation tickets are not complete.
 
 - [ ] Verify README/setup/architecture/demo GIF, eight scenario runbooks and reviewed postmortems, metrics explanations, drafting usage, and KV investigation instructions against actual artifacts.
 - [ ] Confirm CI, chaos, baseline, draft, and trace reports identify their revisions/environments and actual execution status; use measured results for resume claims.

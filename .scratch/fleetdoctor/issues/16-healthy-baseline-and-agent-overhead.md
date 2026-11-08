@@ -4,7 +4,7 @@
 
 **Blocked by:** 14: Full CI validation
 
-**Status:** ready-for-agent
+**Status:** blocked; not started. The listed blocking verification/investigation tickets are not complete.
 
 - [ ] Run a separate one-hour lab session with idle periods, ordinary light workloads, and brief healthy transients; both nodes must remain observable with zero false incidents.
 - [ ] Average agent CPU must be below 2% of one logical core and peak RSS below 50 MB on each node. Measure workload memory separately.

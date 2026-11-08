@@ -1,32 +1,32 @@
 # FleetDoctor tasks
 
-Ticket12 is locally implemented with an actual Claude draft from a saved disk incident and a separate agent-reviewed result pending owner acceptance. [Ticket12 evidence](docs/task12-evidence.md) keeps fixture/static proof, subscription generation, coordinator review, independent inspection, publication, and owner acceptance distinct. Ticket11 evidence remains historical and independently scoped.
+**Status synced 2026-11-08** against merged `main` at [`9c817ce`](https://github.com/NguyenVietMy/FleetDoctor/commit/9c817ce8c278dc9e10a56080b1c7033015aaa3b9). Implementation Tickets 03–12 are merged. Ticket14 has passing CI execution evidence with its PRD coverage audit pending; Tickets 13 and 15–19 remain unstarted. Ticket12's model example still needs owner author acceptance.
 
-Approved breakdown: 19 slices. Ticket numbers below are sequential; the discussion column preserves the original numbers, including split slices 3A/3B and validations 13A–13F.
+The [delivery status](docs/delivery-status.md) links merged PRs, retained CI proof and pending live/acceptance work. Individual issue checklists distinguish delivered implementation from unverified live demonstrations. The [PRD](<FleetDoctor PRD.md>) owns requirements, thresholds, windows and measurement rules. Tickets 01/02 retain their 2026-10-11 AWS functional evidence; five-run calibration, the healthy-hour/overhead run and final delivery acceptance remain later gates.
 
-The [PRD](<FleetDoctor PRD.md>) owns requirements, thresholds, windows, and measurement rules. Tickets 01 and 02 passed their AWS functional demonstrations on 2026-10-11; Task02's frozen independent verdict and remaining gates are recorded in [Task02 evidence](docs/task02-evidence.md). Task03 is implemented locally; its exact source acceptance, verification and remaining gates are tracked in [Task03 evidence](docs/task03-evidence.md). Task04 is implemented with builder-local verification; [Task04 evidence](docs/task04-evidence.md) records the measured proof and the still-unrun independent, remote, AWS and rendered-dashboard gates. Task05 is implemented for local verification; [Task05 evidence](docs/task05-evidence.md) records its distinct local, Linux, isolated-service, inspection, and AWS gates. Task06 is implemented for builder-local verification; [Task06 evidence](docs/task06-evidence.md) separates fixture, isolated-service, native-kernel, inspection, CI, rendered-dashboard, and AWS gates. Task07 is implemented for builder-local verification; [Task07 evidence](docs/task07-evidence.md) separates fixture, real-service, native-ext4/PostgreSQL, inspection, CI, rendered-dashboard, and AWS gates. Task08 is implemented for builder-local verification; [Task08 evidence](docs/task08-evidence.md) separates fixture, real-service, native-process/PostgreSQL, inspection, CI, rendered-dashboard, and AWS gates. Ticket12 implementation and its actual-model disk example are local; owner author acceptance remains pending. Later tickets are unstarted. `ready-for-agent` means the ticket is specified. Work starts when its blockers are complete. See also [Task01 evidence](docs/task01-evidence.md). Project target: 2026-10-25.
+Approved breakdown: 19 slices. Ticket numbers below are sequential; the discussion column preserves the original numbers, including split slices 3A/3B and validations 13A–13F. `ready-for-agent` means specified; a ticket starts only after its blockers are complete. The original project target remains 2026-10-25, not a claim that it was met.
 
-| Ticket | Discussion | Outcome | Blocked by |
-| --- | --- | --- | --- |
-| 01 | 1 | [Healthy AWS fleet](.scratch/fleetdoctor/issues/01-healthy-aws-fleet.md) | None |
-| 02 | 2 | [Disk-full diagnosis](.scratch/fleetdoctor/issues/02-disk-full-diagnosis.md) | 01 |
-| 03 | 3A | [Outage and replay handling](.scratch/fleetdoctor/issues/03-outage-and-replay-handling.md) | 02 |
-| 04 | 3B | [Durable ingestion and restart recovery](.scratch/fleetdoctor/issues/04-durable-ingestion-and-restart-recovery.md) | 03 |
-| 05 | 4 | [CPU saturation](.scratch/fleetdoctor/issues/05-cpu-saturation.md) | 02 |
-| 06 | 5 | [Workload OOM](.scratch/fleetdoctor/issues/06-workload-oom.md) | 02 |
-| 07 | 6 | [Inode exhaustion](.scratch/fleetdoctor/issues/07-inode-exhaustion.md) | 02 |
-| 08 | 7 | [FD pressure](.scratch/fleetdoctor/issues/08-fd-pressure.md) | 02 |
-| 09 | 8 | [Network degradation](.scratch/fleetdoctor/issues/09-network-degradation.md) | 02 |
-| 10 | 9 | [DNS failure](.scratch/fleetdoctor/issues/10-dns-failure.md) | 09 |
-| 11 | 10 | [I/O bottleneck](.scratch/fleetdoctor/issues/11-io-bottleneck.md) | 02 |
-| 12 | 11 | [Postmortem drafting](.scratch/fleetdoctor/issues/12-postmortem-drafting.md) | 02 |
-| 13 | 12 | [DistributedKVStore investigation](.scratch/fleetdoctor/issues/13-distributedkvstore-investigation.md) | 05, 06, 08, 09, 11 |
-| 14 | 13A | [Full CI validation](.scratch/fleetdoctor/issues/14-full-ci-validation.md) | 04, 05, 06, 07, 08, 10, 11, 12 |
-| 15 | 13B | [Chaos measurement validation](.scratch/fleetdoctor/issues/15-chaos-measurement-validation.md) | 14 |
-| 16 | 13C | [Healthy baseline and agent overhead](.scratch/fleetdoctor/issues/16-healthy-baseline-and-agent-overhead.md) | 14 |
-| 17 | 13D | [Postmortem verification](.scratch/fleetdoctor/issues/17-postmortem-verification.md) | 15 |
-| 18 | 13E | [KV tracing verification](.scratch/fleetdoctor/issues/18-kv-tracing-verification.md) | 13 |
-| 19 | 13F | [Final delivery verification](.scratch/fleetdoctor/issues/19-final-delivery-verification.md) | 16, 17, 18 |
+| Ticket | Discussion | Outcome | Status | Blocked by |
+| --- | --- | --- | --- | --- |
+| 01 | 1 | [Healthy AWS fleet](.scratch/fleetdoctor/issues/01-healthy-aws-fleet.md) | Implemented; AWS functional evidence recorded | None |
+| 02 | 2 | [Disk-full diagnosis](.scratch/fleetdoctor/issues/02-disk-full-diagnosis.md) | Implemented; AWS functional evidence recorded | 01 |
+| 03 | 3A | [Outage and replay handling](.scratch/fleetdoctor/issues/03-outage-and-replay-handling.md) | [Merged PR #2](https://github.com/NguyenVietMy/FleetDoctor/pull/2) | 02 |
+| 04 | 3B | [Durable ingestion and restart recovery](.scratch/fleetdoctor/issues/04-durable-ingestion-and-restart-recovery.md) | [Merged PR #3](https://github.com/NguyenVietMy/FleetDoctor/pull/3) | 03 |
+| 05 | 4 | [CPU saturation](.scratch/fleetdoctor/issues/05-cpu-saturation.md) | [Merged PR #4](https://github.com/NguyenVietMy/FleetDoctor/pull/4) | 02 |
+| 06 | 5 | [Workload OOM](.scratch/fleetdoctor/issues/06-workload-oom.md) | [Merged PR #5](https://github.com/NguyenVietMy/FleetDoctor/pull/5) | 02 |
+| 07 | 6 | [Inode exhaustion](.scratch/fleetdoctor/issues/07-inode-exhaustion.md) | [Merged PR #6](https://github.com/NguyenVietMy/FleetDoctor/pull/6) | 02 |
+| 08 | 7 | [FD pressure](.scratch/fleetdoctor/issues/08-fd-pressure.md) | [Merged PR #7](https://github.com/NguyenVietMy/FleetDoctor/pull/7) | 02 |
+| 09 | 8 | [Network degradation](.scratch/fleetdoctor/issues/09-network-degradation.md) | [Merged PR #8](https://github.com/NguyenVietMy/FleetDoctor/pull/8) | 02 |
+| 10 | 9 | [DNS failure](.scratch/fleetdoctor/issues/10-dns-failure.md) | [Merged PR #9](https://github.com/NguyenVietMy/FleetDoctor/pull/9) | 09 |
+| 11 | 10 | [I/O bottleneck](.scratch/fleetdoctor/issues/11-io-bottleneck.md) | [Merged PR #10](https://github.com/NguyenVietMy/FleetDoctor/pull/10) | 02 |
+| 12 | 11 | [Postmortem drafting](.scratch/fleetdoctor/issues/12-postmortem-drafting.md) | [Merged PR #11](https://github.com/NguyenVietMy/FleetDoctor/pull/11); author acceptance pending | 02 |
+| 13 | 12 | [DistributedKVStore investigation](.scratch/fleetdoctor/issues/13-distributedkvstore-investigation.md) | Not started; implementation blockers merged | 05, 06, 08, 09, 11 |
+| 14 | 13A | [Full CI validation](.scratch/fleetdoctor/issues/14-full-ci-validation.md) | CI execution recorded; coverage audit pending | 04, 05, 06, 07, 08, 10, 11, 12 |
+| 15 | 13B | [Chaos measurement validation](.scratch/fleetdoctor/issues/15-chaos-measurement-validation.md) | Not started; blocked | 14 |
+| 16 | 13C | [Healthy baseline and agent overhead](.scratch/fleetdoctor/issues/16-healthy-baseline-and-agent-overhead.md) | Not started; blocked | 14 |
+| 17 | 13D | [Postmortem verification](.scratch/fleetdoctor/issues/17-postmortem-verification.md) | Not started; blocked | 15 |
+| 18 | 13E | [KV tracing verification](.scratch/fleetdoctor/issues/18-kv-tracing-verification.md) | Not started; blocked | 13 |
+| 19 | 13F | [Final delivery verification](.scratch/fleetdoctor/issues/19-final-delivery-verification.md) | Not started; blocked | 16, 17, 18 |
 
 ## Working rules
 

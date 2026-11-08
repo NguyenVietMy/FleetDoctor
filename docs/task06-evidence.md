@@ -1,5 +1,11 @@
 # Task06 evidence status
 
+**Delivery status checked 2026-11-08:** implementation merged in [PR #5](https://github.com/NguyenVietMy/FleetDoctor/pull/5). See [current delivery/CI status and remaining gates](delivery-status.md) and the [ticket checklist](../.scratch/fleetdoctor/issues/06-workload-oom.md).
+
+## Historical handoff record
+
+The text below retains the original builder/coordinator handoff and its source-bound limits. Statements there about unrun publication or CI describe that earlier assignment; use the dated delivery status above for merge/CI status. Those later results do not grant AWS, rendered-dashboard or owner acceptance.
+
 Task06 implements explicit schema-v3 host/workload memory telemetry while preserving literal v1/v2 serialization and fingerprints; bounded `/proc`, cgroup-v2, RSS and incremental kernel-log collection; immediate generation-scoped workload-OOM detection and three-sample recovery; heterogeneous atomic incident/checkpoint persistence; API, fixed history, Prometheus and Grafana surfaces; and bounded delegated-systemd helper, native smoke and measured-harness entry points.
 
 Evidence remains separated by role and environment:

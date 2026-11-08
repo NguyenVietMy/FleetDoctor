@@ -1,5 +1,11 @@
 # Task05 evidence status
 
+**Delivery status checked 2026-11-08:** implementation merged in [PR #4](https://github.com/NguyenVietMy/FleetDoctor/pull/4). See [current delivery/CI status and remaining gates](delivery-status.md) and the [ticket checklist](../.scratch/fleetdoctor/issues/05-cpu-saturation.md).
+
+## Historical handoff record
+
+The text below retains the original builder/coordinator handoff and its source-bound limits. Statements there about unrun publication or CI describe that earlier assignment; use the dated delivery status above for merge/CI status. Those later results do not grant AWS, rendered-dashboard or owner acceptance.
+
 Task05 implements strict schema-v2 host CPU telemetry while preserving literal schema-v1 serialization/fingerprints; bounded `/proc` host/process collection; CPU trigger/recovery with heterogeneous atomic incident/checkpoint persistence; fresh API, fixed Prometheus history, and Grafana surfaces; and bounded helper, smoke, and harness entry points.
 
 Evidence is deliberately separated:

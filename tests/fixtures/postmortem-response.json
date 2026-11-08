@@ -1,0 +1,93 @@
+{
+  "sections": [
+    {
+      "section": "symptoms",
+      "claims": [
+        {
+          "kind": "observed",
+          "text": "The saved incident reports exhausted workload block space on the dedicated disk mount.",
+          "citations": [
+            "/incident/diagnosis",
+            "/incident/resource"
+          ]
+        }
+      ]
+    },
+    {
+      "section": "timeline",
+      "claims": [
+        {
+          "kind": "observed",
+          "text": "The measured trigger-to-diagnosis interval was 10.25 seconds.",
+          "citations": [
+            "/scenario/trigger_to_diagnosis_seconds"
+          ]
+        }
+      ]
+    },
+    {
+      "section": "diagnosis",
+      "claims": [
+        {
+          "kind": "observed",
+          "text": "FleetDoctor recorded the disk_block_exhaustion rule at critical severity.",
+          "citations": [
+            "/incident/rule",
+            "/incident/severity"
+          ]
+        }
+      ]
+    },
+    {
+      "section": "evidence",
+      "claims": [
+        {
+          "kind": "observed",
+          "text": "Opening block usage was 97.25 percent.",
+          "citations": [
+            "/incident/opening_evidence/block_usage_percent"
+          ]
+        },
+        {
+          "kind": "inference",
+          "text": "The saved threshold observation is consistent with the recorded diagnosis, but does not identify a writer process.",
+          "citations": [
+            "/scenario/events/threshold_observed/utc",
+            "/incident/opening_evidence/block_usage_percent"
+          ]
+        }
+      ]
+    },
+    {
+      "section": "recovery",
+      "claims": [
+        {
+          "kind": "observed",
+          "text": "The bounded cleanup record reports completion and the incident later resolved.",
+          "citations": [
+            "/scenario/cleanup_attempts/0/result/cleanup_complete",
+            "/incident/resolved_at"
+          ]
+        }
+      ]
+    },
+    {
+      "section": "lessons",
+      "claims": [
+        {
+          "kind": "missing",
+          "text": "The saved telemetry does not identify a writer PID or path.",
+          "citations": []
+        },
+        {
+          "kind": "observed",
+          "text": "The saved investigation steps require checking fresh mount evidence and cleanup records.",
+          "citations": [
+            "/incident/investigation_steps/0",
+            "/incident/investigation_steps/1"
+          ]
+        }
+      ]
+    }
+  ]
+}

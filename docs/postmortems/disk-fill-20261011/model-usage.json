@@ -1,0 +1,25 @@
+{
+  "actual_model": "claude-opus-5-5",
+  "backend": "claude-cli",
+  "billed_cost_status": "unknown",
+  "billed_cost_usd": null,
+  "effort": "high",
+  "modelUsage": {
+    "claude-opus-5-5": {
+      "cacheCreationInputTokens": 40277,
+      "cacheReadInputTokens": 0,
+      "canonicalModel": "claude-opus-5-5",
+      "contextWindow": 200000,
+      "costBasis": "list",
+      "costUSD": 0.474984,
+      "inputTokens": 2,
+      "maxOutputTokens": 128000,
+      "outputTokens": 7638,
+      "provider": "firstParty",
+      "thinkingTokens": 2289,
+      "webSearchRequests": 0
+    }
+  },
+  "provider_reported_equivalent_cost_usd": 0.474984,
+  "requested_model": "claude-opus-5-5"
+}

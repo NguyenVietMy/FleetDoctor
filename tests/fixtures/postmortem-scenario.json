@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "scenario": "disk_fill",
+  "status": "passed",
+  "incident_id": "11111111-1111-4111-8111-111111111111",
+  "target": "node-a",
+  "reference": "node-b",
+  "resource": "/var/lib/fleetdoctor/chaos/disk",
+  "expected_diagnosis": "disk_block_exhaustion",
+  "actual_diagnosis": "disk_block_exhaustion",
+  "configuration": {
+    "disk_rule": {
+      "trigger_percent": 95,
+      "recovery_percent": 90,
+      "consecutive_samples": 3,
+      "max_gap_seconds": 10,
+      "severity": "critical"
+    }
+  },
+  "events": {
+    "threshold_observed": {
+      "monotonic_seconds": 10.0,
+      "utc": "2026-10-11T23:38:19.550052+00:00"
+    },
+    "api_diagnosis": {
+      "monotonic_seconds": 20.25,
+      "utc": "2026-10-11T23:38:29.800052+00:00"
+    },
+    "cleanup/complete": {
+      "monotonic_seconds": 24.0,
+      "utc": "2026-10-11T23:38:33.550052+00:00"
+    },
+    "api_resolution": {
+      "monotonic_seconds": 35.5,
+      "utc": "2026-10-11T23:38:45.050052+00:00"
+    }
+  },
+  "trigger_to_diagnosis_seconds": 10.25,
+  "injection_to_diagnosis_seconds": 15.5,
+  "cleanup_attempts": [
+    {
+      "attempt": 1,
+      "result": {
+        "cleanup_complete": true
+      }
+    }
+  ],
+  "recovery_observation": {
+    "observed_at": "2026-10-11T23:38:45.000000+00:00",
+    "filesystem": {
+      "mountpoint": "/var/lib/fleetdoctor/chaos/disk",
+      "block_usage_percent": 1.0
+    }
+  },
+  "errors": [],
+  "polls": [
+    {
+      "omitted": "large polling history"
+    }
+  ],
+  "opening_detail": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "node_id": "node-a",
+    "resource": "/var/lib/fleetdoctor/chaos/disk",
+    "rule": "disk_block_exhaustion",
+    "status": "active",
+    "severity": "critical",
+    "diagnosis": "Filesystem /var/lib/fleetdoctor/chaos/disk has exhausted workload block space",
+    "configuration": {
+      "trigger_percent": 95.0,
+      "recovery_percent": 90.0,
+      "consecutive_samples": 3,
+      "max_gap_seconds": 10.0,
+      "severity": "critical"
+    },
+    "opening_evidence": {
+      "block_available": true,
+      "block_usage_percent": 97.25,
+      "observed_at": "2026-10-11T23:38:29.000000+00:00"
+    },
+    "latest_evidence": {
+      "block_available": true,
+      "block_usage_percent": 97.25,
+      "observed_at": "2026-10-11T23:38:29.000000+00:00"
+    },
+    "opened_at": "2026-10-11T23:38:29.000000+00:00",
+    "observed_at": "2026-10-11T23:38:29.000000+00:00",
+    "evaluated_at": "2026-10-11T23:38:29.100000+00:00",
+    "updated_at": "2026-10-11T23:38:29.100000+00:00",
+    "resolved_at": null,
+    "resolution_reason": null,
+    "superseded_at": null,
+    "supersession_reason": null,
+    "replacement_resource_evidence": null,
+    "investigation_steps": [
+      "Confirm fresh exact-mount evidence.",
+      "Inspect bounded cleanup records."
+    ],
+    "evidence_age_seconds": 0.1,
+    "evidence_stale": false,
+    "evidence_available": true,
+    "evidence_fresh": true
+  },
+  "resolved_detail": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "node_id": "node-a",
+    "resource": "/var/lib/fleetdoctor/chaos/disk",
+    "rule": "disk_block_exhaustion",
+    "status": "resolved",
+    "severity": "critical",
+    "diagnosis": "Filesystem /var/lib/fleetdoctor/chaos/disk has exhausted workload block space",
+    "configuration": {
+      "trigger_percent": 95.0,
+      "recovery_percent": 90.0,
+      "consecutive_samples": 3,
+      "max_gap_seconds": 10.0,
+      "severity": "critical"
+    },
+    "opening_evidence": {
+      "block_available": true,
+      "block_usage_percent": 97.25,
+      "observed_at": "2026-10-11T23:38:29.000000+00:00"
+    },
+    "latest_evidence": {
+      "block_available": true,
+      "block_usage_percent": 1.0,
+      "observed_at": "2026-10-11T23:38:45.000000+00:00"
+    },
+    "opened_at": "2026-10-11T23:38:29.000000+00:00",
+    "observed_at": "2026-10-11T23:38:45.000000+00:00",
+    "evaluated_at": "2026-10-11T23:38:45.050052+00:00",
+    "updated_at": "2026-10-11T23:38:45.050052+00:00",
+    "resolved_at": "2026-10-11T23:38:45.050052+00:00",
+    "resolution_reason": null,
+    "superseded_at": null,
+    "supersession_reason": null,
+    "replacement_resource_evidence": null,
+    "investigation_steps": [
+      "Confirm fresh exact-mount evidence.",
+      "Inspect bounded cleanup records."
+    ],
+    "evidence_age_seconds": 0.0,
+    "evidence_stale": false,
+    "evidence_available": true,
+    "evidence_fresh": true
+  }
+}

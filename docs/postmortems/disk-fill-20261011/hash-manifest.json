@@ -1,0 +1,10 @@
+{
+  "artifacts": {
+    "draft.md": "4f1c0970ebc9880a93fe0c1f27186817a9ffa534040f5a4afe57db9b37d25a4c",
+    "evidence.json": "3c42428e8317b57b621be9f32dedc2e7704c5a96d6231bf2e21b8c34eeffa81d",
+    "model-usage.json": "8b8458f9d5554b42c4b05097d8f28c23bdf07d90a2bcedb8b0b9368a638a6fc8",
+    "review-receipt.json": "39532dde088d8f0853c5af6bb3dc908de4e88cefa1a7501e33309c35aa7d549a",
+    "reviewed-final.md": "e851618efebe96ab0f6d10b221c8a78e18f4810719acb05d7eb7207e31c01795"
+  },
+  "schema_version": 1
+}

@@ -1,4 +1,4 @@
-name: Task 01 through 11 checks
+name: Task 01 through 12 checks
 on: [push, pull_request]
 jobs:
   filesystem-and-services:
@@ -13,6 +13,16 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run ruff check .
       - run: uv run mypy src tests scripts
+      - name: Prove Ticket12 fixture postmortem drafting
+        run: |
+          uv run pytest -q tests/test_postmortem.py
+          uv run python -m fleetdoctor.postmortem \
+            --incident-id 11111111-1111-4111-8111-111111111111 \
+            --scenario-record tests/fixtures/postmortem-scenario.json \
+            --output-dir "$RUNNER_TEMP/task12-fixture-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --backend fixture \
+            --fixture-response tests/fixtures/postmortem-response.json
+          uv run python scripts/check_postmortem_examples.py
       - run: uv run pytest
       - run: git diff --check
       - name: Run Linux root fixture suite
@@ -23,7 +33,7 @@ jobs:
           docker run --rm "$tag"
           docker run --rm --user 10001:10001 "$tag" \
             /app/.venv/bin/python -m pytest -q
-      - run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns, fleetdoctor.io'
+      - run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns, fleetdoctor.io, fleetdoctor.postmortem'
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.13.1

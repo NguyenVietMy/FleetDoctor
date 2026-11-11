@@ -9,6 +9,10 @@ follow-up boot, and all three instances were stopped. The delivery receipt recor
 of these new documentation bytes and the commit-bound publication/CI results. Ticket18 and owner
 acceptance retain their separate scope.
 
+The owner authorized completion of Ticket13 and its remaining delivery work on 2026-11-10 local
+time. This delivery also updates TASKS, the delivery summary and the local Ticket13 checklist.
+Checked tracker items record verified implementation evidence. Owner acceptance remains pending.
+
 ## Frozen implementation contract
 
 - FleetDoctor base: `3caf025699d9d01901e7cafad2f473126e8b0374`
@@ -119,6 +123,10 @@ matched all 19 Python modules on monitor, node-a and node-b. The controller and 
 fix3 hashes above. The native node binary SHA-256 is
 `426643da073f8293b620194f2fd9de576d08051910252221b0b9127e3b1c5e6a`, and the client is
 `d381b9e50ed47b5bdc6567ae0e5d7ab4fcd8355c6592ddb7b39d5072e77947c5`.
+
+The workload directory `aws-ticket13-20261111T033338Z` reused the protected runtime prepared under
+`aws-ticket13-20261111T024103Z`. Its binaries, 19 FleetDoctor modules, controller and source archive
+were hash-checked again before capture and after the workload.
 
 | Private logical artifact | SHA-256 |
 | --- | --- |

@@ -20,7 +20,7 @@ Approved breakdown: 19 slices. Ticket numbers below are sequential; the discussi
 | 10 | 9 | [DNS failure](.scratch/fleetdoctor/issues/10-dns-failure.md) | [Merged PR #9](https://github.com/NguyenVietMy/FleetDoctor/pull/9) | 09 |
 | 11 | 10 | [I/O bottleneck](.scratch/fleetdoctor/issues/11-io-bottleneck.md) | [Merged PR #10](https://github.com/NguyenVietMy/FleetDoctor/pull/10) | 02 |
 | 12 | 11 | [Postmortem drafting](.scratch/fleetdoctor/issues/12-postmortem-drafting.md) | [Merged PR #11](https://github.com/NguyenVietMy/FleetDoctor/pull/11); author acceptance pending | 02 |
-| 13 | 12 | [DistributedKVStore investigation](.scratch/fleetdoctor/issues/13-distributedkvstore-investigation.md) | Not started; implementation blockers merged | 05, 06, 08, 09, 11 |
+| 13 | 12 | [DistributedKVStore investigation](.scratch/fleetdoctor/issues/13-distributedkvstore-investigation.md) | Implemented; bounded AWS trace verified; Ticket18/owner verification separate | 05, 06, 08, 09, 11 |
 | 14 | 13A | [Full CI validation](.scratch/fleetdoctor/issues/14-full-ci-validation.md) | CI execution recorded; coverage audit pending | 04, 05, 06, 07, 08, 10, 11, 12 |
 | 15 | 13B | [Chaos measurement validation](.scratch/fleetdoctor/issues/15-chaos-measurement-validation.md) | Not started; blocked | 14 |
 | 16 | 13C | [Healthy baseline and agent overhead](.scratch/fleetdoctor/issues/16-healthy-baseline-and-agent-overhead.md) | Not started; blocked | 14 |

@@ -38,9 +38,9 @@ The latest merge or follow-up PR run has its own commit and result in [GitHub Ac
 - Ticket05: actual host saturation/diagnosis/recovery in the target AWS lab remains unverified; the limited CPU smoke is not that demonstration.
 - Tickets06–11: delivered native/service/CI checks do not replace AWS deployment, the five-run-per-scenario batch, healthy-hour/overhead measurement or rendered/owner acceptance.
 - Ticket12: one historical disk draft and an agent-reviewed result exist; **owner author acceptance remains pending**. The generator was hardened after that preserved example. Eight measured-scenario postmortems remain Ticket17.
-- Ticket13: implementation blockers are merged, but the KV investigation has not started.
+- Ticket13: the controller and investigation are implemented, with a bounded native AWS 16-pair trace, scoped deployed-agent/reference observations, exact pre-scope configuration restoration and stopped-lab proof on 2026-11-11 UTC. See the [investigation](distributedkvstore-investigation.md) and [evidence ledger](task13-evidence.md). Publication/CI follow the associated commit. Ticket18 and owner acceptance retain their separate scope.
 - Ticket14: passing CI execution and retained exact-commit results are recorded above; the PRD case-by-case coverage audit remains unchecked and blocks acceptance.
 - Tickets15/16: the 40-run AWS batch and separate one-hour healthy/overhead session remain blocked by Ticket14.
 - Tickets17/18/19: eight-scenario postmortem verification, KV trace verification and final delivery/budget/export acceptance remain blocked by their recorded dependencies.
 
-No AWS deployment, measured batch, billing reconciliation or owner acceptance is granted by this documentation sync. [TASKS.md](../TASKS.md) remains the index; each issue preserves its blocking edges.
+The 2026-11-08 documentation sync granted no live or owner acceptance. The later Ticket13 exercise above records its own bounded deployment/workload evidence. Measured scenario batches, final billing reconciliation and owner acceptance retain their separate scope. [TASKS.md](../TASKS.md) remains the index; each issue preserves its blocking edges.

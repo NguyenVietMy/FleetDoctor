@@ -240,7 +240,8 @@ root-owned and not writable by the run user, all three exact node identities dea
 KV checkout clean. This remains local protected-runtime evidence, not AWS or ordinary deployed
 agent/collector/reference-node evidence. The normal workload did not expire the alarm, inject faults
 or exercise a real release gate. Focused fixtures cover gate publication/ownership controls and
-injected controller signal/expiry handling; actual deployed gated-service integration remains unrun.
+injected controller signal/expiry handling. This local checkpoint preceded the actual gated AWS
+exercise below.
 
 ## Local attempts and capture verdict
 
@@ -256,7 +257,8 @@ The justified coordinator-owned protected `local-build3` retry passed on the unc
 the separate operational result above. The historical `local-build2` capture and metric ranges remain
 valid for their recorded hashes and remain the detailed study rather than a replaced benchmark. The
 new protected `local-build4` run passed on unchanged fix3 code after builder and coordinator affected
-proof; fresh inspection3 remains pending.
+proof. Fresh inspection3 later approved that frozen local fix3 snapshot, as recorded in the
+[evidence ledger](task13-evidence.md).
 
 Capture is usable only when tcpdump reports `listening on lo`, writes a complete PCAP header, exits
 without kernel drops after an intentional stop, and remains alive with every attached strace process
@@ -327,6 +329,12 @@ Unix epoch seconds. The numeric packet decode uses UTC.
 
 These ranges use the three distinct ordinary samples in each phase. CPU percentages for a PID use
 the agent's process convention. Host/device facts cover other activity on the same machine.
+
+Samples are grouped by their `observed_at` timestamps. Rate fields summarize preceding intervals,
+so the first sample in each phase includes earlier activity. The first untraced sample at
+03:35:23.50 covers approximately 03:35:18.5–23.5, before the phase began at 03:35:21.975. The first
+traced sample at 03:35:38.50 covers approximately 03:35:33.5–38.5, crossing the traced start at
+03:35:37.657. The table therefore includes activity on both sides of those boundaries.
 
 | Measurement | Untraced | Traced |
 | --- | --- | --- |

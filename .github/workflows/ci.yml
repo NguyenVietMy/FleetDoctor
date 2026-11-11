@@ -32,8 +32,8 @@ jobs:
           tag="fleetdoctor-task11-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
           trap 'docker image rm --force "$tag" >/dev/null 2>&1 || true' EXIT
           docker build --target test --tag "$tag" .
-          docker run --rm "$tag"
-          docker run --rm --user 10001:10001 "$tag" \
+          docker run --rm --init "$tag"
+          docker run --rm --init --user 10001:10001 "$tag" \
             /app/.venv/bin/python -m pytest -q
       - run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns, fleetdoctor.io, fleetdoctor.postmortem'
       - uses: hashicorp/setup-terraform@v3

@@ -72,7 +72,8 @@ integration is recorded in its own section below. These local bundles retain the
   per phase; 23 staged source/binary/archive files unchanged; 1,965 runtime entries root-owned and not
   writable by the run user; all three node identities dead and all three ports independently bindable.
 - Scope: the workload armed but did not expire the tcpdump alarm and injected no signals. Those control
-  paths are focused fake-process proof, while AWS/service/reference/restore evidence remains pending.
+  paths are focused fake-process proof. AWS/service/reference/restoration evidence followed in the
+  later actual AWS exercise below.
 
 ## Protected local-build4 fix3 operational evidence
 
@@ -179,6 +180,9 @@ same object. The re-exported native manifest matches the original native bytes e
   `/usr/bin/python3` path. The slim image provides its interpreter under `/usr/local/bin`. The
   fixture-only correction preserves the same 43 focused cases and their root/nonroot expectations.
   The failed hosted runs remain retained, and later CI results belong to the corrected commit.
+- Two subsequent container cleanup assertions exposed orphaned children awaiting reaping while
+  pytest ran as PID 1. The fixture containers now use Docker's `--init` so an init process reaps those
+  children. The strict identity-exit assertions remain part of the root and nonroot suites.
 - Workload artifacts, PostgreSQL and monitor stores were privately exported. All three existing
   instances were confirmed stopped by 03:43:29.050135 UTC. Preparation added 23 native-build packages
   and dependencies on node-a, then the approved four `tc` prerequisite packages on each agent, with

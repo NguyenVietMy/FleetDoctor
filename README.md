@@ -1,6 +1,6 @@
 # FleetDoctor
 
-Ticket12 adds an offline, evidence-linked postmortem drafter without changing monitoring, diagnosis, or storage. See the [drafting guide](docs/postmortem-drafting.md), [actual Claude disk draft](docs/postmortems/disk-fill-20261011/draft.md), [agent-reviewed result pending owner acceptance](docs/postmortems/disk-fill-20261011/reviewed-final.md), and [Ticket12 evidence status](docs/task12-evidence.md). Ticket11's I/O lifecycle remains documented in the [I/O runbook](docs/io-bottleneck.md).
+Ticket13 adds a bounded DistributedKVStore tracing controller and an investigation of a native Amazon Linux 2023 workload. The AWS exercise verified 16 PUT/GET pairs, complete syscall/packet captures, ordinary deployed-agent observations for all three peers, a healthy reference node, and exact restoration of the pre-scope agent configuration. See the [observed investigation and reproduction handoff](docs/distributedkvstore-investigation.md) and [Ticket13 evidence status](docs/task13-evidence.md). Raw captures and private exports remain outside Git. Ticket18 and owner acceptance retain their own verification scope. Ticket12's offline evidence-linked postmortem drafter remains documented in the [drafting guide](docs/postmortem-drafting.md), [actual Claude disk draft](docs/postmortems/disk-fill-20261011/draft.md), [agent-reviewed result pending owner acceptance](docs/postmortems/disk-fill-20261011/reviewed-final.md), and [Ticket12 evidence status](docs/task12-evidence.md). Ticket11's I/O lifecycle remains documented in the [I/O runbook](docs/io-bottleneck.md).
 
 FleetDoctor monitors a small Linux fleet and produces evidence-supported resource diagnoses. **Tasks 01 and 02 implement filesystem collection, healthy-fleet visibility and durable disk incident lifecycle.** Task02 passed local checks and two AWS functional lifecycles on 2026-10-11; see [Task02 evidence](docs/task02-evidence.md) for the frozen inspection record and verification limits. Task03 adds bounded outage delivery and reporting. Task04 adds durable bounded ingestion checkpoints and restart recovery; [Task04 evidence](docs/task04-evidence.md) separates builder proof from independent and live gates. Task05 adds strict v2 host CPU telemetry and CPU saturation. Task06 adds strict v3 host/workload memory telemetry and a generation-scoped workload-OOM lifecycle; see the [OOM runbook](docs/workload-oom.md) and [Task06 evidence status](docs/task06-evidence.md). Task07 adds inode exhaustion with an inode-specific lifecycle, bounded owned helper, and native ext4 proof; see the [inode runbook](docs/inode-exhaustion.md) and [Task07 evidence status](docs/task07-evidence.md). Task08 adds strict v4 process FD pressure, durable exact-identity watches, and a pidfd-only bounded helper; see the [FD runbook](docs/fd-pressure.md) and [Task08 evidence status](docs/task08-evidence.md). The [PRD](<FleetDoctor PRD.md>) owns the full project's requirements.
 
@@ -34,6 +34,7 @@ uv run python scripts/fd_helper_integration.py --output <external-path>/fd-nativ
 uv run python scripts/network_helper_integration.py --output <external-path>/network-native.json
 uv run python scripts/dns_helper_integration.py --output <external-path>/dns-native.json
 uv run python -m fleetdoctor.postmortem --help
+uv run python scripts/kv_trace.py --help
 # Native Linux/WSL only; deliberately limited and not a saturation claim:
 uv run python scripts/cpu_smoke.py --workers 2 --seconds 5 --output <external-path>/cpu-smoke.json
 # Root Linux with systemd+cgroup v2 and Docker; real bounded kernel OOM:
@@ -58,6 +59,8 @@ uv run mypy src tests scripts
 uv run pytest -q tests/test_postmortem.py
 uv run pytest
 uv run python -m fleetdoctor.postmortem --help
+uv run pytest -q tests/test_kv_trace.py
+uv run python scripts/kv_trace.py --help
 uv run python -c "import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns"
 terraform -chdir=infra/aws fmt -check
 terraform -chdir=infra/aws init -backend=false -lockfile=readonly

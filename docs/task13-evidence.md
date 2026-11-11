@@ -29,6 +29,10 @@ Checked tracker items record verified implementation evidence. Owner acceptance 
   / `c044552301e2126e50310a9cbb1129764374e433b755674712bfdc44d1542173`.
 - Hardened fix3 code/test SHA-256: `cc56f6b334f9028dae087263f30cd4a5ce6f6ab068b738133bef6133ae20ff4a`
   / `4de4a414a35fe8acdf0e1f71d9dc82f6b7be3fa52e10da440655f6f97872ec1e`.
+- The later fixture-portability test SHA-256 is
+  `ff65ef9430a0589b212e60b14a615840733d1a908eb7e4b8910d08cd27638c72`.
+  The controller retains the fix3 hash. Root fixtures discover the system interpreter in standard
+  binary directories, including `/usr/local/bin`, and pass it explicitly to their owned subprocesses.
 
 Fixture/fake-process checks prove controller contracts only. The external local-build2 bundle adds
 actual local KV workload, syscall/packet, direct-sampling and cleanup evidence for fix1. The protected
@@ -105,6 +109,7 @@ integration is recorded in its own section below. These local bundles retain the
 | Fresh independent Claude inspection2 | REVISE: KV13-J01..J04 accepted; successful local-build3 evidence remains historical fix2 evidence |
 | Builder fix3 affected proof | Passed for the fix3 hashes above: Ruff format/check, mypy, help and diff; Windows focused 25 passed/18 Linux skips; Linux focused 43 passed/0 skips as normal user and root |
 | Coordinator fix3 affected proof | Passed on unchanged fix3 bytes: locked sync, Ruff format/check, mypy, help and diff; Windows focused 25 passed/18 Linux skips; Linux focused 43 passed/0 skips as normal user and root |
+| Fixture-portability correction after first hosted run | Ruff format/lint, mypy and diff passed; Windows 25 passed/18 Linux-only skips; Linux 43 passed/0 skips as ordinary user and root for the new test hash above |
 | Protected `local-build4` functional retry | Passed: terminal manifest, all 16 exact pairs, complete capture/decode and traces, intended-identity sampling, prelaunch/postrun protected-runtime audits and clean cleanup |
 | Fresh independent Claude inspection3 of local fix3 bytes | APPROVED for the exact local snapshot above, with four low advisories retained externally |
 | Latest-commit hosted CI | Commit-bound push/PR results accompany delivery in GitHub Actions |
@@ -119,8 +124,8 @@ their separate scope. Raw captures, configuration backups and private store expo
 
 The workload ran at 03:35:21.975335–03:35:53.515423 UTC on 2026-11-11. The native deployment gate
 matched all 380 source-inventory files before, during and after deployment. Installed package probes
-matched all 19 Python modules on monitor, node-a and node-b. The controller and tests retain their
-fix3 hashes above. The native node binary SHA-256 is
+matched all 19 Python modules on monitor, node-a and node-b. The controller retains its fix3 hash.
+The later test-only portability correction is identified above. The native node binary SHA-256 is
 `426643da073f8293b620194f2fd9de576d08051910252221b0b9127e3b1c5e6a`, and the client is
 `d381b9e50ed47b5bdc6567ae0e5d7ab4fcd8355c6592ddb7b39d5072e77947c5`.
 
@@ -170,6 +175,10 @@ same object. The re-exported native manifest matches the original native bytes e
   Follow-up verification completed restoration/health/history/export/shutdown without repeating the
   workload. Earlier startup failures and the unrelated mixed-unit Grafana health-demo assertion
   remain retained with their exact coverage. Rendered-dashboard acceptance remains unrun.
+- The first hosted root-container suite exposed six fixture failures caused by the hard-coded
+  `/usr/bin/python3` path. The slim image provides its interpreter under `/usr/local/bin`. The
+  fixture-only correction preserves the same 43 focused cases and their root/nonroot expectations.
+  The failed hosted runs remain retained, and later CI results belong to the corrected commit.
 - Workload artifacts, PostgreSQL and monitor stores were privately exported. All three existing
   instances were confirmed stopped by 03:43:29.050135 UTC. Preparation added 23 native-build packages
   and dependencies on node-a, then the approved four `tc` prerequisite packages on each agent, with

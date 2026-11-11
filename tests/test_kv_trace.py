@@ -62,14 +62,21 @@ def wait_for_path(path: Path, timeout: float = 5.0) -> None:
     raise AssertionError(f"timed out waiting for {path}")
 
 
+def linux_fixture_python() -> str:
+    if os.geteuid() != 0:
+        return sys.executable
+    python = shutil.which("python3", path="/usr/bin:/usr/local/bin:/bin")
+    assert python is not None, "root Linux fixtures require a system Python interpreter"
+    return str(Path(python).resolve())
+
+
 def linux_fixture_user(tmp_path: Path) -> tuple[UserIdentity, Path, str]:
     pwd = __import__("pwd")
     if os.geteuid() == 0:
         record = pwd.getpwnam("nobody")
-        python = "/usr/bin/python3"
     else:
         record = pwd.getpwuid(os.geteuid())
-        python = sys.executable
+    python = linux_fixture_python()
     owned = (
         Path(tempfile.mkdtemp(prefix="kv-trace-run-user-"))
         if os.geteuid() == 0
@@ -1068,7 +1075,7 @@ def test_recursive_prelaunch_audit_requires_root_and_rejects_unsafe_entries(tmp_
             if path.is_dir():
                 path.chmod(0o755)
         venv_python = runtime / "venv" / "bin" / "python"
-        venv_python.symlink_to("/usr/bin/python3")
+        venv_python.symlink_to(linux_fixture_python())
         result_value = kv_trace.audit_protected_runtime(runtime, venv_python, 65534)
         assert result_value["passed"] is True
         assert result_value["resolved_python"].startswith("/usr/")
@@ -1198,7 +1205,7 @@ import kv_trace
 pwd = __import__('pwd')
 rec = pwd.getpwnam('nobody') if os.geteuid() == 0 else pwd.getpwuid(os.geteuid())
 user = kv_trace.UserIdentity(rec.pw_name, rec.pw_uid, rec.pw_gid, rec.pw_dir)
-child_python = '/usr/bin/python3' if os.geteuid() == 0 else sys.executable
+child_python = sys.argv[3]
 def register(process, identity):
     pathlib.Path(sys.argv[2]).write_text(json.dumps(kv_trace.asdict(identity)))
     time.sleep(30)
@@ -1206,7 +1213,9 @@ kv_trace.spawn_owned([child_python, '-c', 'import time; time.sleep(30)'],
     kind='registration-child', user=user, stdin=subprocess.DEVNULL,
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, register=register)
 """
-    parent = subprocess.Popen([sys.executable, "-c", code, script_dir, str(marker)])
+    parent = subprocess.Popen(
+        [sys.executable, "-c", code, script_dir, str(marker), linux_fixture_python()]
+    )
     child_identity: ProcessIdentity | None = None
     try:
         wait_for_path(marker)
@@ -1272,7 +1281,7 @@ import kv_trace
 pwd = __import__('pwd')
 rec = pwd.getpwnam('nobody') if os.geteuid() == 0 else pwd.getpwuid(os.geteuid())
 user = kv_trace.UserIdentity(rec.pw_name, rec.pw_uid, rec.pw_gid, rec.pw_dir)
-child_python = '/usr/bin/python3' if os.geteuid() == 0 else sys.executable
+child_python = sys.argv[8]
 output = pathlib.Path(sys.argv[2])
 marker = pathlib.Path(sys.argv[3])
 archive = pathlib.Path(sys.argv[4])
@@ -1311,6 +1320,7 @@ raise SystemExit(controller.run({}))
             str(marker),
             str(archive),
             *(str(port) for port in ports),
+            linux_fixture_python(),
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

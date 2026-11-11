@@ -221,6 +221,8 @@ def test_network_rule_boundaries_loss_recovery_and_target_change() -> None:
         )
         changes = evaluator.evaluate(current, previous, current.observed_at, config)
         previous = current
+        if sequence < 3:
+            assert changes == [] and not evaluator.active
     assert len(changes) == 1 and changes[0].status == "active"
     incident = changes[0]
     changed = sample(4, now + timedelta(seconds=20), observation(target="192.0.2.11"))
@@ -639,6 +641,7 @@ def test_network_v4_v5_order_atomicity_frozen_restart_and_recurrence() -> None:
     store.fail = False
     assert not store.active()
     assert post(second).json()["status"] == "accepted"
+    assert not store.active()
     third = wire(3, observation(lost=1))
     assert post(third).json()["status"] == "accepted"
     active = store.active()[0]

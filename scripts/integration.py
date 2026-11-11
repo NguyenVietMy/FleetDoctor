@@ -16,6 +16,7 @@ from uuid import uuid4
 import httpx
 from chaos_harness import source_manifest
 from create_env import create
+from integration_contract import prove as prove_contract
 from integration_cpu import prove as prove_cpu
 from integration_disk import PATH as DISK_PATH
 from integration_disk import prove
@@ -194,6 +195,9 @@ def main() -> None:
             stat: dict[str, int] = json.loads((ROOT / "tests/fixtures/statvfs.json").read_text())[
                 "reserved"
             ]
+
+            evidence["api_contract"] = {}
+            prove_contract(api, tokens, evidence["api_contract"])
 
             def produce() -> None:
                 sessions = {node: uuid4() for node in tokens}

@@ -760,6 +760,8 @@ def test_dns_rule_opens_after_three_failures_and_recovers_after_three_successes(
         current = sample(sequence, "failure", baseline=base)
         changes = evaluator.evaluate(current, previous, current.observed_at, config)
         previous = current
+        if sequence < 3:
+            assert changes == [] and not evaluator.active
     assert len(changes) == 1
     incident = changes[0]
     assert incident.rule == "dns_resolution_failure" and incident.status == "active"
@@ -768,7 +770,11 @@ def test_dns_rule_opens_after_three_failures_and_recovers_after_three_successes(
         current = sample(sequence, "success", baseline=base)
         changes = evaluator.evaluate(current, previous, current.observed_at, config)
         previous = current
+        if sequence < 6:
+            assert evaluator.active
+            assert all(change.status == "active" for change in changes)
     assert changes[0].id == incident.id and changes[0].status == "resolved"
+    assert not evaluator.active
     assert Incident.model_validate_json(changes[0].model_dump_json()) == changes[0]
 
 

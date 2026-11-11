@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "requirements": [
+    {
+      "id": "collection-filesystems",
+      "clause": "Linux filesystem parsing, units, malformed/unavailable metrics",
+      "tests": [
+        "tests/test_fleetdoctor.py::test_linux_reserved_blocks_and_units",
+        "tests/test_fleetdoctor.py::test_invalid_capacity_is_unavailable[zero]",
+        "tests/test_fleetdoctor.py::test_invalid_capacity_is_unavailable[bad_blocks]",
+        "tests/test_fleetdoctor.py::test_invalid_capacity_is_unavailable[no_inodes]",
+        "tests/test_fleetdoctor.py::test_bad_filesystem_preserves_good_sibling",
+        "tests/test_fleetdoctor.py::test_bad_counters_rejected[used_bytes--1]",
+        "tests/test_fleetdoctor.py::test_bad_counters_rejected[available_bytes-9000000]",
+        "tests/test_fleetdoctor.py::test_bad_counters_rejected[block_usage_percent-nan]",
+        "tests/test_fleetdoctor.py::test_bad_counters_rejected[used_bytes-123]",
+        "tests/test_fleetdoctor.py::test_bad_counters_rejected[total_bytes-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000]"
+      ]
+    },
+    {
+      "id": "collection-cpu",
+      "clause": "CPU counters, monotonic rates, reset, process parsing and PID reuse",
+      "tests": [
+        "tests/test_cpu.py::test_proc_parsers_and_independent_cpu_fractions",
+        "tests/test_cpu.py::test_process_parser_handles_spaces_and_embedded_close_parenthesis",
+        "tests/test_cpu.py::test_collector_rates_pid_reuse_hotplug_and_interval_reset"
+      ]
+    },
+    {
+      "id": "collection-memory",
+      "clause": "Cgroup events, baselines, generations, missing data and permission errors",
+      "tests": [
+        "tests/test_memory.py::test_memory_parsers_units_unlimited_and_path_validation",
+        "tests/test_memory.py::test_collector_reads_rates_generation_and_event_bracket",
+        "tests/test_memory.py::test_missing_cgroup_and_journal_rebaseline_and_exact_memcg_scope",
+        "tests/test_memory.py::test_journal_validates_boot_cursor_and_permission",
+        "tests/test_memory.py::test_baselines_resets_instability_missing_limits_and_generation_isolation"
+      ]
+    },
+    {
+      "id": "collection-fd",
+      "clause": "FD permissions/limits, growth resets, process exit and identity reuse",
+      "tests": [
+        "tests/test_fd.py::test_real_collector_limit_unavailable_zero_and_unlimited_semantics[unlimited-None-True-None]",
+        "tests/test_fd.py::test_real_collector_limit_unavailable_zero_and_unlimited_semantics[0-None-False-limit_ValueError]",
+        "tests/test_fd.py::test_real_collector_limit_unavailable_zero_and_unlimited_semantics[missing-None-False-limit_ValueError]",
+        "tests/test_fd.py::test_real_collector_count_error_resets_growth_baseline",
+        "tests/test_fd.py::test_identity_recheck_race_discards_configured_measurement",
+        "tests/test_fd.py::test_selected_candidate_exit_race_is_omitted_not_worker_failure",
+        "tests/test_fd.py::test_watched_zombie_is_exact_terminated_identity_evidence"
+      ]
+    },
+    {
+      "id": "collection-network",
+      "clause": "ICMP successes, loss, malformed/permission errors and counter resets",
+      "tests": [
+        "tests/test_network.py::test_ping_partial_loss_uses_successful_reply_median_not_summary_average",
+        "tests/test_network.py::test_ping_no_reply_is_measured_loss_but_permission_is_unavailable",
+        "tests/test_network.py::test_ping_malformed_duplicate_and_wrong_count_are_unavailable",
+        "tests/test_network.py::test_interface_counter_reset_is_per_field"
+      ]
+    },
+    {
+      "id": "collection-dns",
+      "clause": "DNS success/failure, unavailable adapters and bounded response collection",
+      "tests": [
+        "tests/test_dns.py::test_resolved_parser_accepts_exact_a_owner_and_rejects_diagnostic_ipv4",
+        "tests/test_dns.py::test_resolved_overflow_and_stall_are_bounded_and_reaped",
+        "tests/test_dns.py::test_direct_adapter_classifies_no_nameservers_provenance[problem0-None-unavailable-resolver_operation_unavailable]",
+        "tests/test_dns.py::test_direct_adapter_classifies_no_nameservers_provenance[problem1-None-unavailable-resolver_operation_unavailable]",
+        "tests/test_dns.py::test_direct_adapter_classifies_no_nameservers_provenance[SERVFAIL-2-failure-servfail]",
+        "tests/test_dns.py::test_direct_adapter_classifies_no_nameservers_provenance[REFUSED-5-failure-refused]",
+        "tests/test_dns.py::test_direct_adapter_timeout_remains_measured_failure",
+        "tests/test_dns.py::test_direct_adapter_provenance_controls_actual_ingest_rule[permission-False]",
+        "tests/test_dns.py::test_direct_adapter_provenance_controls_actual_ingest_rule[parse-False]",
+        "tests/test_dns.py::test_direct_adapter_provenance_controls_actual_ingest_rule[servfail-True]",
+        "tests/test_dns.py::test_direct_adapter_provenance_controls_actual_ingest_rule[refused-True]",
+        "tests/test_dns.py::test_direct_adapter_provenance_controls_actual_ingest_rule[timeout-True]"
+      ]
+    },
+    {
+      "id": "collection-io",
+      "clause": "I/O parsing, units, counter/activity/idle arithmetic and inconsistent observations",
+      "tests": [
+        "tests/test_io.py::test_bounded_proc_reader_accumulates_short_reads_and_enforces_cap",
+        "tests/test_io.py::test_diskstats_formats_and_malformed_tails",
+        "tests/test_io.py::test_mount_pressure_and_process_parsers_reject_ambiguity",
+        "tests/test_io.py::test_wire_recomputes_arithmetic_idle_and_resource",
+        "tests/test_io.py::test_bracketed_inventory_races_cannot_rate_trigger_or_supersede[namespace]",
+        "tests/test_io.py::test_bracketed_inventory_races_cannot_rate_trigger_or_supersede[remount]",
+        "tests/test_io.py::test_bracketed_inventory_races_cannot_rate_trigger_or_supersede[reused_major_minor]",
+        "tests/test_io.py::test_bracketed_inventory_races_cannot_rate_trigger_or_supersede[filesystem]"
+      ]
+    },
+    {
+      "id": "collection-bound",
+      "clause": "Parallel collection deadlines preserve peers and reap stalled process groups",
+      "tests": [
+        "tests/test_supervisor.py::test_production_six_future_dns_stall_preserves_peers_and_reaps_group",
+        "tests/test_supervisor.py::test_production_io_stall_preserves_every_completed_peer_within_three_seconds",
+        "tests/test_supervisor.py::test_partial_io_frame_preserves_every_completed_peer_and_reaps_group"
+      ]
+    },
+    {
+      "id": "retry-bound",
+      "clause": "Outage queue count/byte bounds, immutable retry, backoff and independent collection",
+      "tests": [
+        "tests/test_delivery.py::test_queue_count_bytes_pinned_and_snapshot_lag",
+        "tests/test_delivery.py::test_backoff_immutable_retry_and_newest_selection",
+        "tests/test_delivery.py::test_collection_independent_of_stalled_upload_and_cancel",
+        "tests/test_delivery.py::test_completion_and_expiry[accepted-0]",
+        "tests/test_delivery.py::test_completion_and_expiry[duplicate-0]",
+        "tests/test_delivery.py::test_completion_and_expiry[superseded-1]",
+        "tests/test_delivery.py::test_completion_and_expiry[ineligible-1]",
+        "tests/test_delivery.py::test_completion_and_expiry[rejected-1]",
+        "tests/test_delivery.py::test_ack_refuses_generic_success[]",
+        "tests/test_delivery.py::test_ack_refuses_generic_success[<html>]",
+        "tests/test_delivery.py::test_ack_refuses_generic_success[[]]",
+        "tests/test_delivery.py::test_ack_refuses_generic_success[{}]",
+        "tests/test_delivery.py::test_ack_refuses_generic_success[{\"status\":\"ok\"}]",
+        "tests/test_delivery.py::test_ack_refuses_generic_success[{\"status\":\"accepted\",\"durable\":0,\"incidents_durable\":true}]"
+      ]
+    },
+    {
+      "id": "rule-disk",
+      "clause": "Disk trigger/recovery, deduplication, recurrence, opening/recovery windows, session/boot resets, replay and rollback",
+      "tests": [
+        "tests/test_disk.py::test_lifecycle_evidence_hysteresis_recurrence_and_independent_nodes",
+        "tests/test_disk.py::test_both_windows_reset[missing-opening]",
+        "tests/test_disk.py::test_both_windows_reset[missing-recovery]",
+        "tests/test_disk.py::test_both_windows_reset[gap-opening]",
+        "tests/test_disk.py::test_both_windows_reset[gap-recovery]",
+        "tests/test_disk.py::test_both_windows_reset[session-opening]",
+        "tests/test_disk.py::test_both_windows_reset[session-recovery]",
+        "tests/test_disk.py::test_both_windows_reset[boot-opening]",
+        "tests/test_disk.py::test_both_windows_reset[boot-recovery]",
+        "tests/test_disk.py::test_both_windows_reset[band-opening]",
+        "tests/test_disk.py::test_both_windows_reset[band-recovery]",
+        "tests/test_disk.py::test_replay_and_failed_transaction_cannot_advance_or_retire_identity"
+      ]
+    },
+    {
+      "id": "rule-cpu",
+      "clause": "CPU trigger/recovery, missing telemetry, threshold windows, staleness and atomic failure",
+      "tests": [
+        "tests/test_cpu.py::test_cpu_trigger_recovery_metrics_staleness_and_history_mapping",
+        "tests/test_cpu.py::test_load_or_incomplete_trigger_data_cannot_open_and_mixed_rules_coexist",
+        "tests/test_cpu.py::test_cpu_commit_failure_rolls_back_checkpoint_and_rule_state",
+        "tests/test_cpu.py::test_cpu_threshold_boundaries_and_missing_data_break_windows"
+      ]
+    },
+    {
+      "id": "rule-oom",
+      "clause": "Immediate OOM detection, recovery/recurrence, session/boot/gap/counter resets and restart",
+      "tests": [
+        "tests/test_memory.py::test_immediate_kill_update_recovery_recurrence_and_metrics",
+        "tests/test_memory.py::test_oom_continuity_breaks_cannot_infer_a_kill[gap]",
+        "tests/test_memory.py::test_oom_continuity_breaks_cannot_infer_a_kill[session]",
+        "tests/test_memory.py::test_oom_continuity_breaks_cannot_infer_a_kill[boot]",
+        "tests/test_memory.py::test_oom_continuity_breaks_cannot_infer_a_kill[counter_reset]",
+        "tests/test_memory.py::test_active_oom_restart_json_reload_and_threshold_require_three_new_samples"
+      ]
+    },
+    {
+      "id": "rule-inode",
+      "clause": "Inode trigger/recovery, scope distinction, continuity windows and restart",
+      "tests": [
+        "tests/test_inode.py::test_inode_lifecycle_block_disambiguation_coverage_metrics_and_history",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[missing-opening]",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[missing-recovery]",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[gap-opening]",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[gap-recovery]",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[session-opening]",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[session-recovery]",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[boot-opening]",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[boot-recovery]",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[band-opening]",
+        "tests/test_inode.py::test_inode_windows_reset_on_ineligible_continuity[band-recovery]",
+        "tests/test_inode.py::test_mixed_disk_inode_lost_ack_reconciles_and_inode_recurs",
+        "tests/test_inode.py::test_collector_restart_rebuilds_inode_opening_and_recovery_windows"
+      ]
+    },
+    {
+      "id": "rule-fd",
+      "clause": "FD trigger/recovery, restart/lost acknowledgement, process exit and boot confirmation",
+      "tests": [
+        "tests/test_fd.py::test_fd_open_watch_restart_lost_ack_exit_resolution_and_metrics",
+        "tests/test_fd.py::test_release_strict_threshold_and_three_new_boot_confirmations",
+        "tests/test_fd.py::test_pending_identity_absence_resets_opening_and_churn_is_bounded"
+      ]
+    },
+    {
+      "id": "rule-network",
+      "clause": "Network windows, target changes, frozen restart, deduplication, replay and recurrence",
+      "tests": [
+        "tests/test_network.py::test_network_rule_boundaries_loss_recovery_and_target_change",
+        "tests/test_network.py::test_network_v4_v5_order_atomicity_frozen_restart_and_recurrence"
+      ]
+    },
+    {
+      "id": "rule-dns",
+      "clause": "DNS trigger/recovery and missing/inconclusive evidence cannot claim healthy resolution",
+      "tests": [
+        "tests/test_dns.py::test_dns_rule_opens_after_three_failures_and_recovers_after_three_successes",
+        "tests/test_dns.py::test_scope_change_preserves_frozen_opening_and_nested_current_dns_facts",
+        "tests/test_dns.py::test_dns_failure_is_inconclusive_when_direct_ip_is_not_exactly_healthy[150.0-0]",
+        "tests/test_dns.py::test_dns_failure_is_inconclusive_when_direct_ip_is_not_exactly_healthy[20.0-1]",
+        "tests/test_dns.py::test_invalid_unavailable_dns_wire_facts_cannot_open_or_resolve_incident"
+      ]
+    },
+    {
+      "id": "rule-io",
+      "clause": "I/O windows, missing/replaced resources, threshold equality, node isolation and recurrence",
+      "tests": [
+        "tests/test_io_lifecycle.py::test_scope_split_merge_missing_last_positive_and_replacement_semantics",
+        "tests/test_io_lifecycle.py::test_threshold_equality_strict_recovery_null_latency_and_frozen_configuration",
+        "tests/test_io_lifecycle.py::test_gap_and_unopened_config_change_reset_windows",
+        "tests/test_io_lifecycle.py::test_generation_counter_and_baseline_resets_cannot_open[boot]",
+        "tests/test_io_lifecycle.py::test_generation_counter_and_baseline_resets_cannot_open[session]",
+        "tests/test_io_lifecycle.py::test_generation_counter_and_baseline_resets_cannot_open[sequence]",
+        "tests/test_io_lifecycle.py::test_generation_counter_and_baseline_resets_cannot_open[counter]",
+        "tests/test_io_lifecycle.py::test_generation_counter_and_baseline_resets_cannot_open[baseline]",
+        "tests/test_io_lifecycle.py::test_nodes_devices_and_recurrence_are_isolated",
+        "tests/test_io_lifecycle.py::test_mixed_io_and_legacy_atomic_commit_checkpoint_reload_and_ordering[fail_after_incidents]",
+        "tests/test_io_lifecycle.py::test_mixed_io_and_legacy_atomic_commit_checkpoint_reload_and_ordering[fail_after_checkpoint]",
+        "tests/test_io_lifecycle.py::test_pending_four_is_sorted_bounded_and_rotates_before_opening"
+      ]
+    },
+    {
+      "id": "rule-io-idle",
+      "clause": "I/O activity/idle recovery requires full windows",
+      "tests": [
+        "tests/test_io.py::test_io_rule_opens_and_resolves_only_full_windows"
+      ]
+    },
+    {
+      "id": "api-boundaries",
+      "clause": "Schema/auth/size validation, freshness/export, idempotency and bounded history",
+      "tests": [
+        "tests/test_fleetdoctor.py::test_wire_rejects_invalid_structure[edit0]",
+        "tests/test_fleetdoctor.py::test_wire_rejects_invalid_structure[edit1]",
+        "tests/test_fleetdoctor.py::test_wire_rejects_invalid_structure[edit2]",
+        "tests/test_fleetdoctor.py::test_wire_rejects_invalid_structure[edit3]",
+        "tests/test_fleetdoctor.py::test_wire_rejects_invalid_structure[edit4]",
+        "tests/test_fleetdoctor.py::test_identity_authentication_and_payload_caps",
+        "tests/test_fleetdoctor.py::test_ingestion_freshness_boundaries[10-True-True-False]",
+        "tests/test_fleetdoctor.py::test_ingestion_freshness_boundaries[10.01-False-False-True]",
+        "tests/test_fleetdoctor.py::test_ingestion_freshness_boundaries[-2-True-True-False]",
+        "tests/test_fleetdoctor.py::test_ingestion_freshness_boundaries[-2.01-False-False-True]",
+        "tests/test_fleetdoctor.py::test_export_and_latest_expire_before_stale",
+        "tests/test_fleetdoctor.py::test_duplicate_superseded_and_session_restart",
+        "tests/test_fleetdoctor.py::test_history_bounds_and_unavailable_upstream"
+      ]
+    },
+    {
+      "id": "api-restart",
+      "clause": "Exact durable acknowledgement, failed storage no durable diagnosis, restart ordering and fresh recovery windows",
+      "tests": [
+        "tests/test_restart_recovery.py::test_negotiated_acknowledgement_is_exact_and_unknown_version_is_pre_evaluation",
+        "tests/test_restart_recovery.py::test_negotiated_retry_fails_closed_when_published_checkpoint_disappears",
+        "tests/test_restart_recovery.py::test_negotiated_retry_fails_closed_on_corrupt_checkpoint_metadata",
+        "tests/test_restart_recovery.py::test_restart_restores_ordering_but_not_live_gauges_or_recovery_window"
+      ]
+    },
+    {
+      "id": "store-rollback",
+      "clause": "Failed transaction rolls back both incidents and checkpoints",
+      "tests": [
+        "tests/test_store_checkpoint.py::test_fixture_ingestion_failure_rolls_back_incident_and_checkpoint[after_incidents]",
+        "tests/test_store_checkpoint.py::test_fixture_ingestion_failure_rolls_back_incident_and_checkpoint[after_checkpoint]"
+      ]
+    },
+    {
+      "id": "postmortem-preservation",
+      "clause": "Fixed-response evidence links, immutable source bundle and terminal failures",
+      "tests": [
+        "tests/test_postmortem.py::test_fixture_bundle_is_complete_immutable_and_portable",
+        "tests/test_postmortem.py::test_source_facts_include_recorded_investigation_guidance",
+        "tests/test_postmortem.py::test_bad_citation_retains_terminal_failure_bundle[/unknown/value]",
+        "tests/test_postmortem.py::test_bad_citation_retains_terminal_failure_bundle[/incident]",
+        "tests/test_postmortem.py::test_bad_citation_retains_terminal_failure_bundle[/incident/opening_evidence]",
+        "tests/test_postmortem.py::test_bad_citation_retains_terminal_failure_bundle[]",
+        "tests/test_postmortem.py::test_bad_citation_retains_terminal_failure_bundle[/incident/investigation_steps/99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[nonzero-provider]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[malformed-response]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[envelope-error-response]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[permission-response]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[wrong-model-response]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[absent-model-response]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[extra-model-response]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[canonical-mismatch-response]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[provider-mismatch-response]",
+        "tests/test_postmortem.py::test_fake_claude_failures_are_visible_and_terminal[overflow-response]",
+        "tests/test_postmortem.py::test_preliminary_backend_failures_have_terminal_manifests[version-nonzero-version]",
+        "tests/test_postmortem.py::test_preliminary_backend_failures_have_terminal_manifests[auth-nonzero-auth]",
+        "tests/test_postmortem.py::test_preliminary_backend_failures_have_terminal_manifests[logged-out-auth]",
+        "tests/test_postmortem.py::test_preliminary_backend_failures_have_terminal_manifests[auth-method-auth]",
+        "tests/test_postmortem.py::test_preliminary_backend_failures_have_terminal_manifests[auth-provider-auth]",
+        "tests/test_postmortem.py::test_drafting_error_does_not_interrupt_collector_diagnosis_or_recovery"
+      ]
+    }
+  ],
+  "service_sections": [
+    "api_contract",
+    "nodes",
+    "history",
+    "postgres_persistence",
+    "prometheus_persistence",
+    "disk_incidents",
+    "inode_incidents",
+    "cpu_incidents",
+    "oom_incidents",
+    "fd_incidents",
+    "network_incidents",
+    "dns_incidents",
+    "io_incidents",
+    "outage_and_replay"
+  ],
+  "required_steps": [
+    "install",
+    "pidfd",
+    "format",
+    "lint",
+    "types",
+    "postmortem",
+    "host_fixtures",
+    "diff",
+    "container_fixtures",
+    "imports",
+    "terraform_format",
+    "terraform_init",
+    "terraform_validate",
+    "services",
+    "disk_native",
+    "inode_native",
+    "fd_native",
+    "network_native",
+    "dns_native",
+    "io_prerequisites",
+    "io_runtime",
+    "io_native",
+    "cpu_smoke",
+    "oom_runtime",
+    "oom_native",
+    "oom_lifecycle"
+  ]
+}

@@ -717,6 +717,7 @@ def test_fd_open_watch_restart_lost_ack_exit_resolution_and_metrics() -> None:
     for sequence, count in enumerate((116, 120, 124)):
         now[0] = NOW + timedelta(seconds=sequence * 5)
         post(client, fd_sample(sequence, present(count)))
+        assert bool(store.active()) is (sequence == 2)
     opened = store.active()[0]
     assert opened.rule == "fd_pressure" and opened.opening_evidence["suspected_leak"] is True
     restored = Incident.model_validate(opened.model_dump(mode="json"))
@@ -742,6 +743,8 @@ def test_fd_open_watch_restart_lost_ack_exit_resolution_and_metrics() -> None:
                 session=NEW_SESSION,
             ),
         )
+        if offset < 2:
+            assert store.get(opened.id).status == "active"  # type: ignore[union-attr]
     resolved = store.get(opened.id)
     assert resolved is not None and resolved.status == "resolved"
     assert resolved.resolution_reason == "confirmed_exit"
@@ -767,6 +770,8 @@ def test_release_strict_threshold_and_three_new_boot_confirmations() -> None:
     for sequence in range(6, 9):
         now[0] = NOW + timedelta(seconds=sequence * 5)
         post(client, fd_sample(sequence, present(16, watched=True)))
+        if sequence < 8:
+            assert store.get(first.id).status == "active"  # type: ignore[union-attr]
     assert store.get(first.id).resolution_reason == "descriptor_release"  # type: ignore[union-attr]
 
     second_identity = identity(43, 200)

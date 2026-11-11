@@ -15,6 +15,8 @@ FROM base AS test
 USER root
 COPY tests ./tests
 COPY docs/postmortems ./docs/postmortems
+COPY docs/ci-coverage.json ./docs/ci-coverage.json
+COPY .github/workflows ./.github/workflows
 COPY scripts ./scripts
 COPY deploy ./deploy
 COPY infra ./infra

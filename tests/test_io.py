@@ -733,6 +733,8 @@ def test_io_rule_opens_and_resolves_only_full_windows() -> None:
         current = sample(sequence, current_device, start + timedelta(seconds=sequence * 5))
         changes = evaluator.evaluate(current, previous, current.observed_at, config)
         previous = current
+        if sequence < 3:
+            assert changes == [] and not evaluator.active
     assert len(changes) == 1 and changes[0].status == "active"
     incident_id = changes[0].id
     for sequence in range(4, 7):
@@ -740,6 +742,9 @@ def test_io_rule_opens_and_resolves_only_full_windows() -> None:
         current = sample(sequence, current_device, start + timedelta(seconds=sequence * 5))
         changes = evaluator.evaluate(current, previous, current.observed_at, config)
         previous = current
+        if sequence < 6:
+            assert evaluator.active
+            assert all(change.status == "active" for change in changes)
     assert changes[-1].status == "resolved"
     assert changes[-1].id == incident_id
     assert changes[-1].opening_evidence != {}

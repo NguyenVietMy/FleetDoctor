@@ -139,16 +139,18 @@ def prove(
             raise AssertionError(result)
         return result
 
-    for _ in range(3):
+    opening_window_counts = []
+    for index in range(3):
         post("failure")
-    active = httpx.get(
-        api + "/diagnoses",
-        params={"node": node, "rule": "dns_resolution_failure", "status": "active"},
-        timeout=3,
-        trust_env=False,
-    ).json()["diagnoses"]
-    if len(active) != 1:
-        raise AssertionError(active)
+        active = httpx.get(
+            api + "/diagnoses",
+            params={"node": node, "rule": "dns_resolution_failure", "status": "active"},
+            timeout=3,
+            trust_env=False,
+        ).json()["diagnoses"]
+        opening_window_counts.append(len(active))
+        if len(active) != (1 if index == 2 else 0):
+            raise AssertionError({"opening_sample": index + 1, "active": active})
     identifier = active[0]["id"]
     compose("restart", "collector")
     deadline = time.monotonic() + 30
@@ -160,11 +162,13 @@ def prove(
         except httpx.HTTPError:
             pass
         time.sleep(1)
-    for _ in range(3):
+    recovery_window_states = []
+    for index in range(3):
         post("success")
-    detail = httpx.get(api + "/diagnoses/" + identifier, timeout=3, trust_env=False).json()
-    if detail["status"] != "resolved":
-        raise AssertionError(detail)
+        detail = httpx.get(api + "/diagnoses/" + identifier, timeout=3, trust_env=False).json()
+        recovery_window_states.append(detail["status"])
+        if detail["status"] != ("resolved" if index == 2 else "active"):
+            raise AssertionError({"recovery_sample": index + 1, "detail": detail})
     deadline = time.monotonic() + 25
     prom_result: dict[str, Any] = {}
     while time.monotonic() < deadline:
@@ -181,6 +185,8 @@ def prove(
         raise AssertionError(prom_result)
     evidence.update(
         incident_id=identifier,
+        opening_window_counts=opening_window_counts,
+        recovery_window_states=recovery_window_states,
         opening=active[0],
         resolved=detail,
         prometheus=prom_result,

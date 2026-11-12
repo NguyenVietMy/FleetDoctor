@@ -1,23 +1,36 @@
-name: Task 01 through 12 checks
+name: FleetDoctor full CI validation
 on: [push, pull_request]
 jobs:
   filesystem-and-services:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      FLEETDOCTOR_CI_DIR: /tmp/task14-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare retained CI results
+        run: |
+          mkdir -p "$FLEETDOCTOR_CI_DIR/root" "$FLEETDOCTOR_CI_DIR/nonroot"
+          # Only the disposable output directory is writable by the container user.
+          chmod 0777 "$FLEETDOCTOR_CI_DIR/nonroot"
       - uses: astral-sh/setup-uv@v6
         with:
           version: 0.11.4
-      - run: uv sync --python /usr/bin/python3 --no-managed-python --locked --all-extras
+      - id: install
+        run: uv sync --python /usr/bin/python3 --no-managed-python --locked --all-extras
       - name: Verify native Python process controls
+        id: pidfd
         run: uv run python -c 'import os; descriptor = os.pidfd_open(os.getpid()); os.close(descriptor)'
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run mypy src tests scripts
+      - id: format
+        run: uv run ruff format --check .
+      - id: lint
+        run: uv run ruff check .
+      - id: types
+        run: uv run mypy src tests scripts
       - name: Prove Ticket12 fixture postmortem drafting
+        id: postmortem
         run: |
-          uv run pytest -q tests/test_postmortem.py
+          uv run pytest -q tests/test_postmortem.py --junitxml="$FLEETDOCTOR_CI_DIR/postmortem.xml"
           uv run python -m fleetdoctor.postmortem \
             --incident-id 11111111-1111-4111-8111-111111111111 \
             --scenario-record tests/fixtures/postmortem-scenario.json \
@@ -25,30 +38,47 @@ jobs:
             --backend fixture \
             --fixture-response tests/fixtures/postmortem-response.json
           uv run python scripts/check_postmortem_examples.py
-      - run: uv run pytest
-      - run: git diff --check
+      - id: host_fixtures
+        run: uv run pytest --junitxml="$FLEETDOCTOR_CI_DIR/linux-host.xml"
+      - id: diff
+        run: git diff --check
       - name: Run Linux root fixture suite
+        id: container_fixtures
         run: |
-          tag="fleetdoctor-task11-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
+          tag="fleetdoctor-task14-fixtures:${{ github.run_id }}-${{ github.run_attempt }}"
           trap 'docker image rm --force "$tag" >/dev/null 2>&1 || true' EXIT
           docker build --target test --tag "$tag" .
-          docker run --rm --init "$tag"
-          docker run --rm --init --user 10001:10001 "$tag" \
-            /app/.venv/bin/python -m pytest -q
-      - run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns, fleetdoctor.io, fleetdoctor.postmortem'
+          docker run --rm --init \
+            --mount "type=bind,source=$FLEETDOCTOR_CI_DIR/root,target=/proof" "$tag" \
+            /app/.venv/bin/python -m pytest -q --junitxml=/proof/linux-root.xml
+          docker run --rm --init --user 10001:10001 \
+            --mount "type=bind,source=$FLEETDOCTOR_CI_DIR/nonroot,target=/proof" "$tag" \
+            /app/.venv/bin/python -m pytest -q --junitxml=/proof/linux-nonroot.xml
+      - id: imports
+        run: uv run python -c 'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.dns, fleetdoctor.io, fleetdoctor.postmortem'
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.13.1
-      - run: terraform -chdir=infra/aws fmt -check
-      - run: terraform -chdir=infra/aws init -backend=false -lockfile=readonly
-      - run: terraform -chdir=infra/aws validate
-      - run: uv run python scripts/integration.py --output $RUNNER_TEMP/task11-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
-      - run: uv run python scripts/disk_helper_integration.py --output $RUNNER_TEMP/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
-      - run: uv run python scripts/inode_helper_integration.py --output $RUNNER_TEMP/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
-      - run: uv run python scripts/fd_helper_integration.py --output $RUNNER_TEMP/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
-      - run: uv run python scripts/network_helper_integration.py --output $RUNNER_TEMP/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}.json
-      - run: uv run python scripts/dns_helper_integration.py --output $RUNNER_TEMP/task10-dns-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - id: terraform_format
+        run: terraform -chdir=infra/aws fmt -check
+      - id: terraform_init
+        run: terraform -chdir=infra/aws init -backend=false -lockfile=readonly
+      - id: terraform_validate
+        run: terraform -chdir=infra/aws validate
+      - id: services
+        run: uv run python scripts/integration.py --output $RUNNER_TEMP/task11-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - id: disk_native
+        run: uv run python scripts/disk_helper_integration.py --output $RUNNER_TEMP/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - id: inode_native
+        run: uv run python scripts/inode_helper_integration.py --output $RUNNER_TEMP/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - id: fd_native
+        run: uv run python scripts/fd_helper_integration.py --output $RUNNER_TEMP/task08-fd-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - id: network_native
+        run: uv run python scripts/network_helper_integration.py --output $RUNNER_TEMP/task09-network-native-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - id: dns_native
+        run: uv run python scripts/dns_helper_integration.py --output $RUNNER_TEMP/task10-dns-native-${{ github.run_id }}-${{ github.run_attempt }}.json
       - name: Install Ticket11 native prerequisites
+        id: io_prerequisites
         run: |
           sudo apt-get update
           sudo apt-get install -y dmsetup e2fsprogs
@@ -59,6 +89,7 @@ jobs:
           sudo systemctl stop "$probe_unit" 2>/dev/null || true
           sudo systemctl reset-failed "$probe_unit" 2>/dev/null || true
       - name: Prepare root-readable Ticket11 native runtime
+        id: io_runtime
         run: |
           native_root="$(sudo mktemp -d "/opt/fleetdoctor-task11-ci-${{ github.run_id }}-${{ github.run_attempt }}.XXXXXX")"
           echo "FLEETDOCTOR_NATIVE_IO=$native_root" >> "$GITHUB_ENV"
@@ -73,6 +104,7 @@ jobs:
             "$native_root/source/.venv/bin/python" -c \
             'import fleetdoctor.agent, fleetdoctor.collector, fleetdoctor.io; print("ticket11 native imports ok")'
       - name: Prove Ticket11 actual-systemd I/O lifecycle
+        id: io_native
         timeout-minutes: 12
         run: |
           sudo env \
@@ -99,8 +131,10 @@ jobs:
             [[ "$native_root" == /opt/fleetdoctor-task11-ci-${{ github.run_id }}-${{ github.run_attempt }}.* && "$(dirname -- "$native_root")" == /opt ]]
             sudo rm -rf -- "$native_root"
           fi
-      - run: uv run python scripts/cpu_smoke.py --workers 2 --seconds 2 --output $RUNNER_TEMP/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - id: cpu_smoke
+        run: uv run python scripts/cpu_smoke.py --workers 2 --seconds 2 --output $RUNNER_TEMP/task05-cpu-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
       - name: Prepare accessible native OOM runtime
+        id: oom_runtime
         run: |
           native_root="$(mktemp -d /tmp/fleetdoctor-oom-ci.XXXXXX)"
           echo "FLEETDOCTOR_NATIVE_CI=$native_root" >> "$GITHUB_ENV"
@@ -114,10 +148,12 @@ jobs:
           sudo -u nobody "$native_root/worktree/.venv/bin/python" -c 'import sys; print(sys.executable)'
           sudo -u nobody test -r "$native_root/worktree/deploy/memory_resource.py"
       - name: Prove native workload OOM
+        id: oom_native
         run: |
           cd "$FLEETDOCTOR_NATIVE_CI/worktree"
           sudo .venv/bin/python scripts/oom_smoke.py --output $RUNNER_TEMP/task06-oom-smoke-${{ github.run_id }}-${{ github.run_attempt }}.json
       - name: Prove native OOM helper lifecycle
+        id: oom_lifecycle
         run: |
           cd "$FLEETDOCTOR_NATIVE_CI/worktree"
           sudo .venv/bin/python scripts/oom_helper_integration.py --output $RUNNER_TEMP/task06-oom-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
@@ -139,11 +175,26 @@ jobs:
             sudo chown "$(id -u):$(id -g)" "$proof_archive"
             chmod 0600 "$proof_archive"
           fi
+      - name: Enforce audited PRD coverage and retain verdict
+        if: always()
+        env:
+          FLEETDOCTOR_CI_STEPS: ${{ toJSON(steps) }}
+        run: |
+          python3 scripts/check_ci_coverage.py \
+            --report "linux-host=$FLEETDOCTOR_CI_DIR/linux-host.xml" \
+            --report "linux-root=$FLEETDOCTOR_CI_DIR/root/linux-root.xml" \
+            --report "linux-nonroot=$FLEETDOCTOR_CI_DIR/nonroot/linux-nonroot.xml" \
+            --integration "$RUNNER_TEMP/task11-integration-${{ github.run_id }}-${{ github.run_attempt }}.json" \
+            --output "$FLEETDOCTOR_CI_DIR/coverage-receipt.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: task11-local-proofs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: task14-ci-proofs-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 30
+          if-no-files-found: error
           path: |
+            ${{ env.FLEETDOCTOR_CI_DIR }}/
+            ${{ runner.temp }}/task12-fixture-${{ github.run_id }}-${{ github.run_attempt }}/
             ${{ runner.temp }}/task11-integration-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task04-disk-helper-${{ github.run_id }}-${{ github.run_attempt }}.json
             ${{ runner.temp }}/task07-inode-native-${{ github.run_id }}-${{ github.run_attempt }}.json

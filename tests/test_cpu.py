@@ -244,6 +244,7 @@ def test_cpu_trigger_recovery_metrics_staleness_and_history_mapping() -> None:
     for sequence in range(3):
         current[0] = NOW + timedelta(seconds=sequence)
         post(client, sample(sequence, 90))
+        assert bool(store.active()) is (sequence == 2)
     active = store.active()
     assert len(active) == 1 and active[0].rule == "cpu_saturation" and active[0].resource == "cpu"
     view = client.get("/nodes/node-a/metrics").json()
@@ -265,6 +266,7 @@ def test_cpu_trigger_recovery_metrics_staleness_and_history_mapping() -> None:
     for sequence in range(3, 6):
         current[0] = NOW + timedelta(seconds=sequence)
         post(client, sample(sequence, 79, runnable=None))
+        assert bool(store.active()) is (sequence < 5)
     resolved = store.get(active[0].id)
     assert resolved is not None and resolved.status == "resolved"
     assert resolved.opening_evidence == opening
@@ -341,6 +343,8 @@ def test_cpu_threshold_boundaries_and_missing_data_break_windows() -> None:
     for sequence in range(10, 13):
         current[0] = NOW + timedelta(seconds=sequence)
         post(client, sample(sequence, 79))
+        if sequence < 12:
+            assert store.get(incident.id).status == "active"  # type: ignore[union-attr]
     assert store.get(incident.id).status == "resolved"  # type: ignore[union-attr]
 
 

@@ -631,7 +631,10 @@ def test_late_selector_cas_failure_rolls_back_earlier_role_in_reverse() -> None:
     assert events[-2:] == [("monitor", "adopt"), ("monitor", "restore")]
 
 
-def test_fd_selector_mismatch_before_worker_sends_no_fd_start(tmp_path: Path) -> None:
+def test_fd_selector_mismatch_before_worker_sends_no_fd_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("fd_harness.source_manifest", lambda: {"evidence_class": "synthetic"})
     value = manifest()
     transport = RecordingTransport()
     transport.cgroups = ["/unexpected"]

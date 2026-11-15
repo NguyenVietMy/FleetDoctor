@@ -1371,6 +1371,115 @@ class OomApi:
         raise AssertionError((path, params))
 
 
+class OomReadinessApi(OomApi):
+    def __init__(
+        self,
+        transport: OomTransport,
+        *,
+        initial_missing: int = 0,
+        missing_forever: bool = False,
+        missing_after_first: bool = False,
+        error: str | None = None,
+        malformed: bool = False,
+        late_clock: FakeClock | None = None,
+    ) -> None:
+        super().__init__(transport)
+        self.initial_missing = initial_missing
+        self.missing_forever = missing_forever
+        self.missing_after_first = missing_after_first
+        self.error = error
+        self.malformed = malformed
+        self.late_clock = late_clock
+
+    def workload(self, sequence: int) -> dict[str, Any]:
+        return super().workload(max(1, sequence - self.initial_missing))
+
+    def metrics(self, sequence: int, reference: bool = False) -> dict[str, Any]:
+        value = super().metrics(sequence, reference)
+        if reference:
+            return value
+        if self.late_clock is not None and sequence == 3:
+            self.late_clock.now += 61
+        missing = (
+            self.missing_forever
+            or sequence <= self.initial_missing
+            or (self.missing_after_first and sequence == 2)
+        )
+        if self.malformed:
+            value["memory"]["workloads"][0]["events"] = None
+        elif missing:
+            value["memory"]["workloads"] = []
+            value["memory"]["workload_errors"] = (
+                {} if self.error is None else {self.transport.cgroup: [self.error]}
+            )
+            value["memory_coverage"]["workloads"] = {self.transport.cgroup: "unavailable"}
+        return value
+
+
+def test_oom_initial_readiness_waits_then_preserves_full_baseline_gate(tmp_path: Path) -> None:
+    cgroup = manifest()["resources"]["oom"]["leaf_paths"][0]
+    transport = OomTransport(cgroup)
+    result = ADAPTERS["oom"].execute(
+        context(
+            tmp_path,
+            "oom-readiness",
+            api=OomReadinessApi(transport, initial_missing=2),
+            transport=transport,
+            clock=FakeClock(),
+        )
+    )
+    assert result["status"] == "passed"
+    assert len(result["raw_report"]["baseline_samples"]) == 3
+    assert [call[1] for call in transport.calls].count("start") == 1
+
+
+@pytest.mark.parametrize(
+    ("api_options", "error_type", "message"),
+    [
+        ({"missing_forever": True}, TimeoutError, "three fresh empty"),
+        ({"error": "cgroup_permission_denied", "initial_missing": 1}, RuntimeError, "unavailable"),
+        ({"malformed": True}, RuntimeError, "unavailable"),
+        ({"missing_after_first": True}, RuntimeError, "unavailable"),
+    ],
+)
+def test_oom_readiness_never_masks_persistent_or_nontransient_failures(
+    tmp_path: Path,
+    api_options: dict[str, Any],
+    error_type: type[BaseException],
+    message: str,
+) -> None:
+    cgroup = manifest()["resources"]["oom"]["leaf_paths"][0]
+    transport = OomTransport(cgroup)
+    with pytest.raises(error_type, match=message):
+        ADAPTERS["oom"].execute(
+            context(
+                tmp_path,
+                "oom-readiness-failure",
+                api=OomReadinessApi(transport, **api_options),
+                transport=transport,
+                clock=FakeClock(),
+            )
+        )
+    assert all(call[1] != "start" for call in transport.calls)
+
+
+def test_oom_readiness_response_completed_after_deadline_cannot_start(tmp_path: Path) -> None:
+    cgroup = manifest()["resources"]["oom"]["leaf_paths"][0]
+    transport = OomTransport(cgroup)
+    clock = FakeClock()
+    with pytest.raises(TimeoutError, match="three fresh empty"):
+        ADAPTERS["oom"].execute(
+            context(
+                tmp_path,
+                "oom-readiness-late",
+                api=OomReadinessApi(transport, late_clock=clock),
+                transport=transport,
+                clock=clock,
+            )
+        )
+    assert all(call[1] != "start" for call in transport.calls)
+
+
 def test_oom_adapter_executes_exact_generation_real_kill_and_recovery(tmp_path: Path) -> None:
     cgroup = manifest()["resources"]["oom"]["leaf_paths"][0]
     transport = OomTransport(cgroup)

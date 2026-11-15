@@ -33,7 +33,7 @@ from campaign_connection import (
     validate_connection_receipt,
 )
 from chaos_harness import DiskHarness, InodeHarness, write_report
-from chaos_oom import add_recovery_sample, generation_key, workload
+from chaos_oom import WorkloadNotObserved, add_recovery_sample, generation_key, workload
 from dns_harness import DnsHarness
 from fd_harness import FdHarness
 from io_harness import IoHarness
@@ -1603,14 +1603,42 @@ class OomAdapter(ScenarioAdapter):
             baseline_item: dict[str, Any] | None = None
             baseline_events: tuple[int, int] | None = None
             previous_identity: tuple[str, str, int, str] | None = None
+            exact_workload_observed = False
             while clock.monotonic() < baseline_deadline and len(baseline_identities) < 3:
                 view = context.api.get(f"/nodes/{context.target}/metrics")
+                if clock.monotonic() >= baseline_deadline:
+                    raise TimeoutError(
+                        "three fresh empty exact-generation OOM baselines are required"
+                    )
                 if (
                     not view.get("fresh")
                     or (view.get("memory_coverage") or {}).get("host") != "available"
                 ):
                     raise ValueError("OOM target telemetry is stale during baseline")
-                candidate = workload(view, cgroup)
+                try:
+                    candidate = workload(view, cgroup)
+                except WorkloadNotObserved:
+                    if exact_workload_observed:
+                        raise RuntimeError(
+                            "exact workload ordinary telemetry is unavailable after observation"
+                        ) from None
+                    current_target = active(context.target)
+                    if clock.monotonic() >= baseline_deadline:
+                        raise TimeoutError(
+                            "three fresh empty exact-generation OOM baselines are required"
+                        ) from None
+                    if any(str(item["id"]) not in target_prior for item in current_target):
+                        raise ValueError(
+                            "unexpected target OOM incident opened during readiness"
+                        ) from None
+                    reference(reference_prior)
+                    if clock.monotonic() >= baseline_deadline:
+                        raise TimeoutError(
+                            "three fresh empty exact-generation OOM baselines are required"
+                        ) from None
+                    clock.sleep(1)
+                    continue
+                exact_workload_observed = True
                 identity = _identity(view)
                 events = candidate["events"]
                 counters = (int(events["oom"]), int(events["oom_kill"]))
@@ -1627,6 +1655,11 @@ class OomAdapter(ScenarioAdapter):
                         <= float(config["max_gap_seconds"])
                     )
                 )
+                current_target = active(context.target)
+                if clock.monotonic() >= baseline_deadline:
+                    raise TimeoutError(
+                        "three fresh empty exact-generation OOM baselines are required"
+                    )
                 if (
                     candidate.get("generation_stable") is True
                     and candidate.get("events_stable") is True
@@ -1637,7 +1670,7 @@ class OomAdapter(ScenarioAdapter):
                     and continuous
                     and not any(
                         item.get("resource") == generation_key(cgroup, candidate)
-                        for item in active(context.target)
+                        for item in current_target
                     )
                 ):
                     baseline_identities.add(identity)
@@ -1651,8 +1684,16 @@ class OomAdapter(ScenarioAdapter):
                     baseline_events = None
                     previous_identity = None
                 reference(reference_prior)
+                if clock.monotonic() >= baseline_deadline:
+                    raise TimeoutError(
+                        "three fresh empty exact-generation OOM baselines are required"
+                    )
                 clock.sleep(1)
-            if baseline_item is None or len(baseline_identities) < 3:
+            if (
+                clock.monotonic() >= baseline_deadline
+                or baseline_item is None
+                or len(baseline_identities) < 3
+            ):
                 raise TimeoutError("three fresh empty exact-generation OOM baselines are required")
             exact_resource = generation_key(cgroup, baseline_item)
             exact_generation = {
@@ -1670,6 +1711,8 @@ class OomAdapter(ScenarioAdapter):
             report["exact_resource"] = exact_resource
             report["exact_generation"] = exact_generation
             report["configuration"] = config
+            if clock.monotonic() >= baseline_deadline:
+                raise TimeoutError("three fresh empty exact-generation OOM baselines are required")
             started = clock.monotonic()
             started_utc = datetime.now(UTC).isoformat()
             report["injection_started_monotonic"] = started

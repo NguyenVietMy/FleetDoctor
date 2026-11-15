@@ -51,20 +51,38 @@ def sleep_until(deadline: float, seconds: float = 1) -> None:
     time.sleep(min(seconds, remaining(deadline, "polling interval")))
 
 
+class WorkloadNotObserved(RuntimeError):
+    """The exact newly prepared workload is not in ordinary telemetry yet."""
+
+
 def workload(view: dict[str, Any], cgroup: str) -> dict[str, Any]:
     if not view.get("fresh"):
         raise RuntimeError("ordinary telemetry became stale during the scenario")
-    result = next(
-        (
-            item
-            for item in (view.get("memory") or {}).get("workloads", [])
-            if item.get("cgroup_path") == cgroup
-        ),
-        None,
-    )
-    if result is None or result.get("events") is None:
+    memory = view.get("memory")
+    if not isinstance(memory, dict) or not isinstance(memory.get("workloads"), list):
         raise RuntimeError("exact workload ordinary telemetry is unavailable")
-    return cast(dict[str, Any], result)
+    matches = [
+        item
+        for item in memory["workloads"]
+        if isinstance(item, dict) and item.get("cgroup_path") == cgroup
+    ]
+    if len(matches) > 1:
+        raise RuntimeError("exact workload ordinary telemetry is malformed")
+    if matches:
+        result = matches[0]
+        if not isinstance(result.get("events"), dict):
+            raise RuntimeError("exact workload ordinary telemetry is unavailable")
+        return cast(dict[str, Any], result)
+    errors = memory.get("workload_errors", {})
+    coverage = (view.get("memory_coverage") or {}).get("workloads", {})
+    if not isinstance(errors, dict) or not isinstance(coverage, dict):
+        raise RuntimeError("exact workload ordinary telemetry is unavailable")
+    scoped_errors = errors.get(cgroup)
+    if coverage.get(cgroup) == "available":
+        raise RuntimeError("exact workload ordinary telemetry is inconsistent")
+    if scoped_errors is None or scoped_errors == ["cgroup_missing"]:
+        raise WorkloadNotObserved("exact workload ordinary telemetry is not observed yet")
+    raise RuntimeError("exact workload ordinary telemetry is unavailable")
 
 
 def sample_identity(view: dict[str, Any]) -> tuple[str, str, int, str]:

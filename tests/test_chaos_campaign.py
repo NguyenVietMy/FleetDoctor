@@ -13,6 +13,8 @@ from typing import Any, cast
 
 import campaign_connection as connection
 import chaos_campaign as campaign
+import chaos_controller
+import fd_resource
 import pytest
 from chaos_campaign import (
     ADAPTERS,
@@ -32,6 +34,7 @@ from chaos_campaign import (
     validate_manifest,
 )
 from chaos_oom import generation_key
+from fd_harness import FdHarness
 
 
 class FakeClock:
@@ -93,6 +96,102 @@ class RecordingTransport:
         if scenario == "config" and action == "restore":
             return {"phase": "restored"}
         return {"owned": True, "phase": action}
+
+
+def test_fd_harness_controller_uses_helper_default_watchdog_before_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class AdmissionReached(RuntimeError):
+        pass
+
+    class Api:
+        def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            del params
+            if path == "/configuration":
+                return {"fd_rule": {"trigger_percent": 80, "recovery_percent": 50}}
+            if path == "/nodes/node-b/metrics":
+                return {"fresh": True, "stale": False, "fd_coverage": {"total": 1, "observed": 1}}
+            if path == "/diagnoses":
+                return {"diagnoses": []}
+            raise AssertionError(f"unexpected pre-admission API path: {path}")
+
+    records: list[dict[str, Any]] = []
+
+    @contextmanager
+    def authority() -> Any:
+        yield 101, 102, {}
+
+    def retain_before_effect(_descriptor: int, record: dict[str, Any]) -> None:
+        records.append(deepcopy(record))
+        raise AdmissionReached("helper admission reached before worker creation")
+
+    monkeypatch.setattr(fd_resource, "_require_posix", lambda: None)
+    monkeypatch.setattr(fd_resource, "_preflight_pidfd", lambda: None)
+    monkeypatch.setattr(
+        fd_resource, "current_boot_id", lambda: "00000000-0000-0000-0000-000000000001"
+    )
+    monkeypatch.setattr(
+        fd_resource,
+        "pwd",
+        type(
+            "Pwd",
+            (),
+            {"getpwnam": staticmethod(lambda _name: type("User", (), {"pw_uid": 1000})())},
+        ),
+    )
+    monkeypatch.setattr(fd_resource, "locked_authority", authority)
+    monkeypatch.setattr(fd_resource, "_write_locked", retain_before_effect)
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+
+    class ProtocolTransport:
+        def __init__(self) -> None:
+            self.start_argv: list[str] = []
+
+        def call(
+            self,
+            scenario: str,
+            action: str,
+            token: str,
+            arguments: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            if scenario == "fd" and action == "start":
+                request = {
+                    "id": "fd-admission",
+                    "scenario": scenario,
+                    "action": action,
+                    "token": token,
+                    "arguments": arguments or {},
+                }
+                self.start_argv, _ = chaos_controller.request_argv(Path.cwd(), request)
+                prior = sys.argv
+                try:
+                    sys.argv = self.start_argv[1:]
+                    fd_resource.main()
+                finally:
+                    sys.argv = prior
+                raise AssertionError("FD start crossed the inert persistence boundary")
+            if scenario == "fd" and action == "cleanup":
+                return {"cleaned": True, "owned": False}
+            if scenario == "fd" and action == "status":
+                return {"owned": False}
+            raise AssertionError(f"unexpected controller call: {scenario}/{action}")
+
+    transport = ProtocolTransport()
+    harness = FdHarness(
+        Api(),
+        campaign.FdInjector(transport),
+        "node-a",
+        "node-b",
+        tmp_path / "fd-admission.json",
+        manifest=lambda: {},
+        token="a" * 32,
+    )
+    with pytest.raises(RuntimeError, match="retained report") as failed:
+        harness.run("release")
+    assert isinstance(failed.value.__cause__, AdmissionReached)
+    assert "--watchdog-seconds" not in transport.start_argv
+    assert records[0]["seconds"] == 120
+    assert records[0]["watchdog_seconds"] == 125
 
 
 def context(

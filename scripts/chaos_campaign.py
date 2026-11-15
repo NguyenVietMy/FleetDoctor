@@ -1004,9 +1004,7 @@ class FdInjector:
         self.transport = transport
 
     def start(self, token: str, limit: int, seconds: int) -> dict[str, Any]:
-        return self.transport.call(
-            "fd", "start", token, {"limit": limit, "seconds": seconds, "watchdog_seconds": 180}
-        )
+        return self.transport.call("fd", "start", token, {"limit": limit, "seconds": seconds})
 
     def pressure(self, token: str) -> dict[str, Any]:
         return self.transport.call("fd", "pressure", token)

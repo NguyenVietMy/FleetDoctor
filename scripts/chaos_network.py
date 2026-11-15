@@ -69,9 +69,17 @@ def aggregate(paths: list[Path]) -> dict[str, Any]:
             )
             result["phase_latency_acceptance"] = result["latency_phase_median_seconds"] < 30
             result["phase_loss_acceptance"] = result["loss_phase_median_seconds"] < 30
-            if not result["phase_latency_acceptance"] or not result["phase_loss_acceptance"]:
+            result["scenario_median_seconds"] = statistics.median(result["slower_per_run_seconds"])
+            result["scenario_median_acceptance"] = result["scenario_median_seconds"] < 30
+            if (
+                not result["phase_latency_acceptance"]
+                or not result["phase_loss_acceptance"]
+                or not result["scenario_median_acceptance"]
+            ):
                 result["status"] = "failed"
-                result["failure"] = "one or more profile medians were 30 seconds or more"
+                result["failure"] = (
+                    "a profile median or the median of per-run slower phases was 30 seconds or more"
+                )
     return result
 
 

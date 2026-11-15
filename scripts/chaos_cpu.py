@@ -52,7 +52,6 @@ def main() -> None:
     if args.workers != expected or online < 1:
         raise ValueError("host saturation requires exactly min(64, 2*online logical CPUs) workers")
     token = hashlib.sha256(os.urandom(32)).hexdigest()[:24]
-    started = time.monotonic()
     report: dict[str, Any] = {
         "status": "failed",
         "scenario": "cpu_saturation",
@@ -95,8 +94,47 @@ def main() -> None:
         report["configuration_sha256"] = hashlib.sha256(
             json.dumps(report["configuration"], sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
+        prior = api(
+            args.base_url + "/diagnoses?node=" + args.node + "&rule=cpu_saturation",
+            args.api_token,
+        )
+        prior_ids = {str(row["id"]) for row in prior.get("diagnoses", [])}
+        injection_started = time.monotonic()
+        report["events"] = {
+            "injection_command_started": {
+                "monotonic_seconds": injection_started,
+                "utc": datetime.now(UTC).isoformat(),
+            }
+        }
         report["injection"] = helper(args.helper, "start", token, args.workers, args.seconds)
-        deadline = started + args.timeout - 30
+        trigger_deadline = injection_started + 60
+        trigger_observed: float | None = None
+        while time.monotonic() < trigger_deadline:
+            target = api(args.base_url + "/nodes/" + args.node + "/metrics", args.api_token)
+            reference = api(
+                args.base_url + "/nodes/" + args.reference_node + "/metrics", args.api_token
+            )
+            cpu = target.get("cpu") or {}
+            if reference.get("active_incident_counts", {}).get("cpu_saturation"):
+                raise RuntimeError("reference node opened a CPU incident")
+            if (
+                target.get("fresh")
+                and cpu.get("busy_percent") is not None
+                and cpu["busy_percent"]
+                >= report["configuration"]["cpu_rule"]["trigger_busy_percent"]
+                and cpu.get("runnable_processes", 0) > cpu.get("logical_cores", 0)
+            ):
+                trigger_observed = time.monotonic()
+                report["ordinary_trigger"] = {"identity": target.get("sample"), "cpu": cpu}
+                report["events"]["ordinary_trigger_observed"] = {
+                    "monotonic_seconds": trigger_observed,
+                    "utc": datetime.now(UTC).isoformat(),
+                }
+                break
+            time.sleep(1)
+        if trigger_observed is None:
+            raise TimeoutError("CPU ordinary telemetry trigger did not appear within 60 seconds")
+        deadline = trigger_observed + 60
         incident = None
         while time.monotonic() < deadline:
             rows = api(
@@ -106,8 +144,11 @@ def main() -> None:
                 + "&rule=cpu_saturation&status=active",
                 args.api_token,
             )
-            if rows.get("diagnoses"):
-                incident = rows["diagnoses"][0]
+            matches = [
+                row for row in rows.get("diagnoses", []) if str(row.get("id")) not in prior_ids
+            ]
+            if matches:
+                incident = matches[0]
                 break
             time.sleep(1)
         if incident is None:
@@ -126,7 +167,15 @@ def main() -> None:
             raise RuntimeError("incident is not linked to an ordinary telemetry trigger")
         incident_id = str(detail["id"])
         report["incident"] = detail
-        report["trigger_to_diagnosis_seconds"] = time.monotonic() - started
+        diagnosis_observed = time.monotonic()
+        if diagnosis_observed > deadline:
+            raise TimeoutError("CPU diagnosis response completed after its deadline")
+        report["events"]["matching_incident_observed"] = {
+            "monotonic_seconds": diagnosis_observed,
+            "utc": datetime.now(UTC).isoformat(),
+        }
+        report["trigger_to_diagnosis_seconds"] = diagnosis_observed - trigger_observed
+        report["injection_to_diagnosis_seconds"] = diagnosis_observed - injection_started
     except BaseException as exc:
         report["error"] = type(exc).__name__
         failure = exc
@@ -138,17 +187,45 @@ def main() -> None:
             if failure is None:
                 failure = exc
         if failure is None and incident_id is not None:
-            recovery_deadline = time.monotonic() + 30
+            cleanup_completed = time.monotonic()
+            report["events"]["cleanup_completed"] = {
+                "monotonic_seconds": cleanup_completed,
+                "utc": datetime.now(UTC).isoformat(),
+            }
+            recovery_deadline = cleanup_completed + 60
+            recovery_identities: set[tuple[str, str, int, str]] = set()
             while time.monotonic() < recovery_deadline:
                 detail = api(args.base_url + "/diagnoses/" + incident_id, args.api_token)
+                target = api(args.base_url + "/nodes/" + args.node + "/metrics", args.api_token)
                 reference = api(
                     args.base_url + "/nodes/" + args.reference_node + "/metrics", args.api_token
                 )
                 if reference.get("active_incident_counts", {}).get("cpu_saturation"):
                     failure = RuntimeError("reference node opened a CPU incident")
                     break
-                if detail.get("status") == "resolved":
+                cpu = target.get("cpu") or {}
+                sample = target.get("sample") or {}
+                if (
+                    target.get("fresh")
+                    and cpu.get("busy_percent") is not None
+                    and cpu["busy_percent"]
+                    < report["configuration"]["cpu_rule"]["recovery_busy_percent"]
+                ):
+                    recovery_identities.add(
+                        (
+                            str(sample.get("boot_id")),
+                            str(sample.get("agent_session_id")),
+                            int(sample.get("sequence", -1)),
+                            str(sample.get("observed_at")),
+                        )
+                    )
+                if detail.get("status") == "resolved" and len(recovery_identities) >= 3:
                     report["recovery"] = detail
+                    report["recovery_identities"] = sorted(recovery_identities)
+                    report["events"]["matching_resolution_observed"] = {
+                        "monotonic_seconds": time.monotonic(),
+                        "utc": datetime.now(UTC).isoformat(),
+                    }
                     report["status"] = "passed"
                     break
                 time.sleep(1)

@@ -68,8 +68,14 @@ Docker volumes; retained AWS backups remain private evidence.
 
 ## 3. Restore the private handoff
 
-Sign in to the same personal OneDrive account and download both of these folders
-fully before restoring. They are outside the Git repository:
+The private download is a release in a separate **private** GitHub repository:
+<https://github.com/NguyenVietMy/FleetDoctor-private-handoff/releases/tag/legion9-20261116>.
+Sign in with the owning GitHub account. The archive and its unlock identity are
+release attachments; neither is committed to this public repository.
+
+The commands below download them into these local folders outside Git. OneDrive
+sync is optional; this laptop's OneDrive was not signed in when preparing the
+handoff. If both folders have already synced to Legion 9, skip the download:
 
 - `OneDrive\FleetDoctor-Transfer\2026-11-16\`
 - `OneDrive\FleetDoctor-TransferKeys\`
@@ -88,6 +94,24 @@ $archivePath = Join-Path $transferRoot 'FleetDoctor-Legion9-20261116.tar.gz.age'
 $identityPath = Join-Path $syncRoot 'FleetDoctor-TransferKeys\Legion9FleetDoctor-20261116.agekey'
 Test-Path -LiteralPath $archivePath
 Test-Path -LiteralPath $identityPath
+
+if (-not (Test-Path -LiteralPath $archivePath)) {
+    New-Item -ItemType Directory -Path $transferRoot -Force | Out-Null
+    gh release download legion9-20261116 --repo NguyenVietMy/FleetDoctor-private-handoff `
+        --dir $transferRoot --pattern 'FleetDoctor-Legion9-20261116.tar.gz.age' `
+        --pattern 'age.exe' --pattern 'RestoreFleetDoctorHandoff.py' `
+        --pattern 'TransferInfo.json' --pattern 'Legion9FleetDoctor-20261116.agekey'
+    if ($LASTEXITCODE -ne 0) { throw 'Private handoff download failed.' }
+    $keyFolder = Split-Path -Parent $identityPath
+    New-Item -ItemType Directory -Path $keyFolder -Force | Out-Null
+    if (-not (Test-Path -LiteralPath $identityPath)) {
+        Move-Item -LiteralPath (Join-Path $transferRoot 'Legion9FleetDoctor-20261116.agekey') `
+            -Destination $identityPath
+    }
+}
+if (-not (Test-Path -LiteralPath $identityPath)) {
+    throw 'Download the unlock identity from the private release into the key folder.'
+}
 
 $ageHash = (Get-FileHash -LiteralPath (Join-Path $transferRoot 'age.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($ageHash -ne '2821a4ed191da07372acd302e5f6feae7a7985e285e1417765ebe74025af45f0') {
@@ -108,7 +132,9 @@ after diagnosing it, rather than overwriting a partial restore.
 
 The private snapshot preserves the task directory's operator source, plans,
 proofs, histories, source archives, current handoff and retained live evidence.
-Caches, virtual environments and worktree `.git` links are omitted. It does not
+Caches, duplicate test sandboxes, virtual environments and worktree `.git` links
+are omitted. Current frozen proof inputs and prior source/proof archives remain.
+It does not
 copy this laptop's AWS credentials, SSH private key, Codex authentication, installed
 programs, active processes or Docker daemon state. Archive-contained old `.env`
 or runtime state is historical evidence, not a ready-to-use local configuration.

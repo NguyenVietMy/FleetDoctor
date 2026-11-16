@@ -1,6 +1,6 @@
 # FleetDoctor tasks
 
-**Status updated 2026-11-11** against baseline `main` at [`f77201e`](https://github.com/NguyenVietMy/FleetDoctor/commit/f77201e9061290acf60831a61acd7bb8d22f87f9). Implementation Tickets 03–13 are merged. Ticket14's PRD coverage audit/enforcement is implemented locally with inspection and current-commit hosted CI pending; Tickets 15–19 retain their separate validation gates. Ticket12's model example still needs owner author acceptance.
+**Status updated 2026-11-11** against Ticket15 pre-build baseline `1b34a5d1abb364431c12860c1253e2f3b51af479`. Implementation Tickets 03–13 are merged. Ticket14 is released by retained main CI run `43136058442`. Ticket15 campaign/controller implementation is locally verified; native/service proof, publication and the actual AWS batch remain pending. Tickets 15–19 retain separate validation gates. Ticket12's model example still needs owner author acceptance.
 
 The [delivery status](docs/delivery-status.md) links merged PRs, retained CI proof and pending live/acceptance work. Individual issue checklists distinguish delivered implementation from unverified live demonstrations. The [PRD](<FleetDoctor PRD.md>) owns requirements, thresholds, windows and measurement rules. Tickets 01/02 retain their 2026-10-11 AWS functional evidence; five-run calibration, the healthy-hour/overhead run and final delivery acceptance remain later gates.
 
@@ -21,8 +21,8 @@ Approved breakdown: 19 slices. Ticket numbers below are sequential; the discussi
 | 11 | 10 | [I/O bottleneck](.scratch/fleetdoctor/issues/11-io-bottleneck.md) | [Merged PR #10](https://github.com/NguyenVietMy/FleetDoctor/pull/10) | 02 |
 | 12 | 11 | [Postmortem drafting](.scratch/fleetdoctor/issues/12-postmortem-drafting.md) | [Merged PR #11](https://github.com/NguyenVietMy/FleetDoctor/pull/11); author acceptance pending | 02 |
 | 13 | 12 | [DistributedKVStore investigation](.scratch/fleetdoctor/issues/13-distributedkvstore-investigation.md) | Implemented; bounded AWS trace verified; Ticket18/owner verification separate | 05, 06, 08, 09, 11 |
-| 14 | 13A | [Full CI validation](.scratch/fleetdoctor/issues/14-full-ci-validation.md) | [Coverage audit/enforcement](docs/ci-coverage.md) implemented locally; inspection and current-commit hosted CI pending | 04, 05, 06, 07, 08, 10, 11, 12 |
-| 15 | 13B | [Chaos measurement validation](.scratch/fleetdoctor/issues/15-chaos-measurement-validation.md) | Not started; blocked | 14 |
+| 14 | 13A | [Full CI validation](.scratch/fleetdoctor/issues/14-full-ci-validation.md) | Released at `1b34a5d1`; retained main CI run `43136058442` passed | 04, 05, 06, 07, 08, 10, 11, 12 |
+| 15 | 13B | [Chaos measurement validation](.scratch/fleetdoctor/issues/15-chaos-measurement-validation.md) | Campaign implementation locally verified; native/service proof, publication and AWS acceptance pending | 14 |
 | 16 | 13C | [Healthy baseline and agent overhead](.scratch/fleetdoctor/issues/16-healthy-baseline-and-agent-overhead.md) | Not started; blocked | 14 |
 | 17 | 13D | [Postmortem verification](.scratch/fleetdoctor/issues/17-postmortem-verification.md) | Not started; blocked | 15 |
 | 18 | 13E | [KV tracing verification](.scratch/fleetdoctor/issues/18-kv-tracing-verification.md) | Not started; blocked | 13 |

@@ -43,6 +43,7 @@ class FdHarness:
         self.target, self.reference, self.output = target, reference, output
         self.monotonic, self.sleep = monotonic, sleep
         self.manifest = manifest or source_manifest
+        self.after_prepare: Callable[[dict[str, Any]], dict[str, Any]] | None = None
         self.after_diagnosis: Callable[[dict[str, Any], str], dict[str, Any]] | None = None
         self.report: dict[str, Any] = {
             "schema_version": 1,
@@ -231,6 +232,8 @@ class FdHarness:
             resource = self.resource(identity)
             self.report["identity"] = identity
             self.report["resource"] = resource
+            if self.after_prepare is not None:
+                self.report["selector_transaction"] = self.after_prepare(identity)
 
             preparation_deadline = injection_completed + 30
             baseline = None

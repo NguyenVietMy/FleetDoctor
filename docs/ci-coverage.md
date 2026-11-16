@@ -2,7 +2,7 @@
 
 Ticket14 audits the five checks in the [PRD CI gate](../FleetDoctor%20PRD.md#ci-gate). The [execution contract](ci-coverage.json) pins 166 exact pytest node IDs, including every selected parameter variant, and 26 required workflow step IDs. [The checker](../scripts/check_ci_coverage.py) compares those IDs with actual results separately in the Linux host, root container and non-root container. The source audit below explains the assertions; the checker verifies execution, not semantic correctness.
 
-Status: audit and enforcement implemented locally; independent inspection and current-commit hosted CI remain pending. The baseline `f77201e9061290acf60831a61acd7bb8d22f87f9` passed [main run 42960011517](https://github.com/NguyenVietMy/FleetDoctor/actions/runs/42960011517), finishing on 2026-11-11 UTC: host 795 passed/100 skipped, root 888/7, non-root 791/104. Those results predate these changes.
+Status: released on merged main `1b34a5d1abb364431c12860c1253e2f3b51af479` by [run 43136058442](https://github.com/NguyenVietMy/FleetDoctor/actions/runs/43136058442): host 817 passed/100 not-required skips, root 910/7 and non-root 813/104, with all 166 required cases passing in every environment. The retained coverage receipt SHA-256 is `cb3ea0b641341bc61e2daa54d7f52118b152b6807d88542f42db94d56260dad3` and its exact contract SHA-256 is `c58f8c5c4608c4717fce4687a172be368f530d3d87c9b2bf80b9eee37004e91b`. The earlier independent verdict did not inspect the final one-line CI artifact-path correction; the coordinator validated that narrow correction separately, without retroactively expanding the old verdict.
 
 ## Installation and static checks
 

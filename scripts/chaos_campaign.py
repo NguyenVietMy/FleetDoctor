@@ -21,9 +21,10 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, NoReturn, Protocol, cast
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
+from uuid import UUID
 
 from campaign_connection import (
     ConnectionPurpose,
@@ -76,6 +77,19 @@ CONTROLLER_SESSION_SECONDS = 6 * 60 * 60
 CONTROLLER_REQUEST_BUDGET = 4096
 MONITOR_CONTROLLER_REQUEST_BUDGET = 200000
 MONITOR_API_READ_BUDGET = 12 * CAMPAIGN_PHASES * 240 + 2000
+FD_POST_RESTORE_DEADLINE_SECONDS = 60
+FD_POST_RESTORE_MAX_POLLS = FD_POST_RESTORE_DEADLINE_SECONDS + 1
+FD_POST_RESTORE_CALIBRATION_HANDOFFS = 2
+FD_POST_RESTORE_MEASURED_HANDOFFS = 5
+FD_POST_RESTORE_RESERVED_API_READS = (
+    FD_POST_RESTORE_CALIBRATION_HANDOFFS + FD_POST_RESTORE_MEASURED_HANDOFFS
+) * FD_POST_RESTORE_MAX_POLLS
+if (
+    FD_POST_RESTORE_CALIBRATION_HANDOFFS * FD_POST_RESTORE_DEADLINE_SECONDS > 120
+    or FD_POST_RESTORE_MEASURED_HANDOFFS * FD_POST_RESTORE_DEADLINE_SECONDS > 300
+    or FD_POST_RESTORE_RESERVED_API_READS > 2000
+):
+    raise RuntimeError("FD post-restore readiness exceeds the existing reserved campaign envelope")
 
 
 def canonical(value: object) -> bytes:
@@ -603,6 +617,8 @@ class Clock(Protocol):
 
     def sleep(self, seconds: float) -> None: ...
 
+    def utcnow(self) -> datetime: ...
+
 
 class SystemClock:
     def monotonic(self) -> float:
@@ -610,6 +626,9 @@ class SystemClock:
 
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
+
+    def utcnow(self) -> datetime:
+        return datetime.now(UTC)
 
 
 class HttpBackend:
@@ -1019,10 +1038,242 @@ class FdInjector:
         return self.transport.call("fd", "cleanup", token)
 
 
+FD_READINESS_MEMORY_ERRORS = frozenset(
+    {
+        "collection_supervisor_starting",
+        "collection_supervisor_stuck",
+        "collection_supervisor_timeout",
+        "memory_collection_timeout",
+        "memory_collection_worker_starting",
+        "memory_collection_worker_stuck",
+        "memory_counter_reset",
+        "memory_rate_baseline_unavailable",
+    }
+)
+FD_READINESS_HEALTHY_MEMORY_ERRORS = frozenset(
+    {"memory_counter_reset", "memory_rate_baseline_unavailable"}
+)
+
+
+def _bounded_memory_errors(view: Mapping[str, Any]) -> tuple[list[str], bool]:
+    memory = view.get("memory")
+    if not isinstance(memory, dict):
+        return [], True
+    host = memory.get("host")
+    if not isinstance(host, dict):
+        return [], True
+    errors = host.get("errors")
+    if not isinstance(errors, list) or any(not isinstance(item, str) for item in errors):
+        return [], True
+    if len(errors) > 16 or any(item not in FD_READINESS_MEMORY_ERRORS for item in errors):
+        return [], True
+    return list(errors), False
+
+
+def _bounded_sample_identity(view: Mapping[str, Any]) -> tuple[dict[str, Any], datetime] | None:
+    sample = view.get("sample")
+    if not isinstance(sample, dict):
+        return None
+    boot = sample.get("boot_id")
+    session = sample.get("agent_session_id")
+    sequence = sample.get("sequence")
+    observed = sample.get("observed_at")
+    if (
+        not isinstance(boot, str)
+        or not isinstance(session, str)
+        or not isinstance(sequence, int)
+        or isinstance(sequence, bool)
+        or sequence < 0
+        or not isinstance(observed, str)
+    ):
+        return None
+    try:
+        UUID(boot)
+        UUID(session)
+        parsed = datetime.fromisoformat(observed)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    parsed = parsed.astimezone(UTC)
+    return (
+        {
+            "boot_id": boot,
+            "agent_session_id": session,
+            "sequence": sequence,
+            "observed_at": parsed.isoformat(),
+        },
+        parsed,
+    )
+
+
+def _fd_post_restore_readiness(
+    context: AdapterContext,
+    report: dict[str, Any],
+    *,
+    pre_restore_view: Mapping[str, Any],
+    restored_inventory: Mapping[str, Any],
+    restore_completed_at: datetime,
+    expected_role_receipt_sha256: str,
+) -> None:
+    readiness: dict[str, Any] = {
+        "stage": "post_selector_restore",
+        "status": "pending",
+        "deadline_outcome": "pending",
+        "restore_completed_at": restore_completed_at.astimezone(UTC).isoformat(),
+        "checks": [],
+    }
+    report["post_restore_readiness"] = readiness
+
+    def initial_fail(category: str, message: str) -> NoReturn:
+        readiness.update(status="failed", deadline_outcome="rejected", failure_category=category)
+        write_report(context.output, report)
+        raise ValueError(message)
+
+    role_receipt = getattr(context.transport, "role_receipt", None)
+    if not isinstance(role_receipt, dict) or digest(role_receipt) != expected_role_receipt_sha256:
+        initial_fail("role_identity", "FD authenticated role receipt changed before readiness")
+    expected_boot = role_receipt.get("boot_id")
+    if not isinstance(expected_boot, str):
+        initial_fail("role_identity", "FD authenticated role receipt lacks boot identity")
+    try:
+        UUID(expected_boot)
+    except ValueError as exc:
+        try:
+            initial_fail("role_identity", "FD authenticated role receipt has invalid boot identity")
+        except ValueError as failure:
+            raise failure from exc
+
+    pre = _bounded_sample_identity(pre_restore_view)
+    if (
+        pre is None
+        or pre[0]["boot_id"] != expected_boot
+        or pre_restore_view.get("fresh") is not True
+    ):
+        initial_fail("pre_restore_identity", "FD pre-restoration sample identity is invalid")
+    pre_identity, pre_observed = pre
+    write_report(context.output, report)
+    deadline = context.clock.monotonic() + FD_POST_RESTORE_DEADLINE_SECONDS
+    bound_session: str | None = None
+    previous_new_identity: tuple[int, datetime] | None = None
+
+    def fail(category: str, message: str, *, timeout: bool = False) -> NoReturn:
+        readiness.update(
+            status="failed",
+            deadline_outcome="timeout" if timeout else "rejected",
+            failure_category=category,
+        )
+        write_report(context.output, report)
+        if timeout:
+            raise TimeoutError(message) from None
+        raise ValueError(message) from None
+
+    for _ in range(FD_POST_RESTORE_MAX_POLLS):
+        if context.clock.monotonic() >= deadline:
+            fail("deadline", "FD post-restore readiness missed its deadline", timeout=True)
+        if digest(getattr(context.transport, "role_receipt", None)) != expected_role_receipt_sha256:
+            fail("role_identity", "FD authenticated role receipt changed during readiness")
+        try:
+            current_inventory = _bounded_inventory(
+                context.transport.call("config", "inventory", "0" * 32, {"scope": "agent"})
+            )
+        except BaseException:
+            readiness["checks"].append({"status": "failed", "category": "config_inventory"})
+            fail("config_inventory", "FD collector configuration could not be verified")
+        if current_inventory != restored_inventory:
+            fail("config_changed", "FD collector configuration changed during readiness")
+        try:
+            view = context.api.get(f"/nodes/{context.target}/metrics")
+        except BaseException:
+            readiness["checks"].append({"status": "failed", "category": "metrics_read"})
+            fail("metrics_read", "FD post-restore metrics read failed")
+        if context.clock.monotonic() >= deadline:
+            fail("deadline", "FD post-restore readiness read crossed its deadline", timeout=True)
+
+        identity = _bounded_sample_identity(view)
+        errors, malformed_errors = _bounded_memory_errors(view)
+        coverage = view.get("memory_coverage")
+        memory_host = coverage.get("host") if isinstance(coverage, dict) else None
+        observation: dict[str, Any] = {
+            "status": "pending",
+            "category": "unclassified",
+            "fresh": view.get("fresh") if isinstance(view.get("fresh"), bool) else None,
+            "memory_host": memory_host
+            if memory_host in {"available", "unavailable"}
+            else "unknown",
+            "memory_errors": errors if not malformed_errors else ["unknown"],
+            "sample": identity[0] if identity is not None else None,
+        }
+        readiness["checks"].append(observation)
+        if identity is None:
+            fail("sample_identity", "FD post-restore sample identity is invalid")
+        sample, observed = identity
+        if sample["boot_id"] != expected_boot:
+            fail("boot_changed", "FD post-restore sample boot changed")
+        now = context.clock.utcnow().astimezone(UTC)
+        if (
+            observed > now.replace(microsecond=now.microsecond)
+            and (observed - now).total_seconds() > 2
+        ):
+            fail("future_sample", "FD post-restore sample is future-dated")
+        if view.get("fresh") is not True or view.get("stale") is True:
+            fail("stale", "FD post-restore sample is stale")
+        if view.get("active_incident_count") != 0:
+            fail("incident", "FD post-restore sample has an active incident")
+        if malformed_errors:
+            fail("memory_errors", "FD post-restore memory errors are malformed or unknown")
+
+        session = cast(str, sample["agent_session_id"])
+        sequence = cast(int, sample["sequence"])
+        if session == pre_identity["agent_session_id"]:
+            if sequence < cast(int, pre_identity["sequence"]) or observed < pre_observed:
+                fail("older_sample", "FD post-restore sample moved backwards")
+            if memory_host != "available" or errors:
+                fail("old_generation_unhealthy", "FD old collector generation became unhealthy")
+            observation.update(category="pre_restore_generation")
+            context.clock.sleep(1)
+            continue
+        if observed <= restore_completed_at or observed <= pre_observed:
+            fail("older_sample", "FD new collector generation predates selector restoration")
+        if bound_session is None:
+            bound_session = session
+        elif session != bound_session:
+            fail("session_changed", "FD collector generation changed twice during readiness")
+        if previous_new_identity is not None and (
+            sequence <= previous_new_identity[0] or observed <= previous_new_identity[1]
+        ):
+            fail("non_monotonic", "FD new collector generation did not advance monotonically")
+        previous_new_identity = (sequence, observed)
+
+        if errors == ["collection_supervisor_starting"]:
+            if memory_host != "unavailable":
+                fail("startup_shape", "FD supervisor startup sample has invalid memory coverage")
+            observation.update(category="collection_supervisor_starting")
+            context.clock.sleep(1)
+            continue
+        if any(error not in FD_READINESS_HEALTHY_MEMORY_ERRORS for error in errors):
+            fail("memory_errors", "FD post-restore memory collection failed")
+        if memory_host != "available":
+            fail("memory_unavailable", "FD post-restore host memory is unavailable")
+        observation.update(status="passed", category="ready")
+        readiness.update(status="passed", deadline_outcome="ready")
+        write_report(context.output, report)
+        return
+    fail("deadline", "FD post-restore readiness missed its deadline", timeout=True)
+
+
 class FdAdapter(ScenarioAdapter):
     name = "fd"
 
     def execute(self, context: AdapterContext) -> dict[str, Any]:
+        role_receipt = getattr(context.transport, "role_receipt", None)
+        if not isinstance(role_receipt, dict) or not isinstance(role_receipt.get("boot_id"), str):
+            raise ValueError("FD requires an authenticated role boot receipt")
+        try:
+            UUID(role_receipt["boot_id"])
+        except ValueError as exc:
+            raise ValueError("FD authenticated role boot receipt is invalid") from exc
+        role_receipt_sha256 = digest(role_receipt)
         injector = FdInjector(context.transport)
         harness = FdHarness(
             context.api,
@@ -1083,8 +1334,14 @@ class FdAdapter(ScenarioAdapter):
 
         harness.after_prepare = configure
         failure: BaseException | None = None
+        pre_restore_view: dict[str, Any] | None = None
+        pre_restore_capture_failure: BaseException | None = None
         try:
             report = harness.run("release", limit=128)
+            try:
+                pre_restore_view = context.api.get(f"/nodes/{context.target}/metrics")
+            except BaseException as exc:
+                pre_restore_capture_failure = exc
         except BaseException as exc:
             failure = exc
             raise
@@ -1098,6 +1355,30 @@ class FdAdapter(ScenarioAdapter):
                 except BaseException:
                     if failure is None:
                         raise
+        restore_completed_at = context.clock.utcnow()
+        if pre_restore_capture_failure is not None:
+            report["post_restore_readiness"] = {
+                "stage": "post_selector_restore",
+                "status": "failed",
+                "deadline_outcome": "rejected",
+                "failure_category": "pre_restore_capture",
+                "restore_completed_at": restore_completed_at.astimezone(UTC).isoformat(),
+                "checks": [],
+            }
+            write_report(context.output, report)
+            raise ValueError(
+                "FD pre-restoration sample capture failed"
+            ) from pre_restore_capture_failure
+        if pre_restore_view is None:
+            raise RuntimeError("FD pre-restoration sample capture was not retained")
+        _fd_post_restore_readiness(
+            context,
+            report,
+            pre_restore_view=pre_restore_view,
+            restored_inventory=before_worker,
+            restore_completed_at=restore_completed_at,
+            expected_role_receipt_sha256=role_receipt_sha256,
+        )
         phases = [
             {
                 "name": "fd",
@@ -1559,6 +1840,7 @@ class OomAdapter(ScenarioAdapter):
             "trigger_samples": [],
             "recovery_samples": [],
             "reference_samples": [],
+            "reference_checks": [],
         }
 
         def active(node: str) -> list[dict[str, Any]]:
@@ -1569,16 +1851,63 @@ class OomAdapter(ScenarioAdapter):
                 )["diagnoses"]
             )
 
+        def rejected_reference_check(category: str) -> dict[str, Any]:
+            check = {
+                "status": "rejected",
+                "rejection_category": category,
+                "fresh": None,
+                "sample": None,
+                "memory_host": "unknown",
+                "memory_errors": ["unknown"],
+            }
+            report["reference_checks"].append(check)
+            return check
+
+        def reference_incident_ids(check: dict[str, Any] | None = None) -> set[str]:
+            try:
+                return {str(item["id"]) for item in active(context.reference)}
+            except BaseException:
+                if check is None:
+                    rejected_reference_check("incident_read")
+                else:
+                    check.update(status="rejected", rejection_category="incident_read")
+                raise ValueError("OOM reference incident observation failed") from None
+
         def reference(original_ids: set[str]) -> None:
-            view = context.api.get(f"/nodes/{context.reference}/metrics")
+            try:
+                view = context.api.get(f"/nodes/{context.reference}/metrics")
+            except BaseException:
+                rejected_reference_check("metrics_read")
+                raise ValueError("OOM reference metrics observation failed") from None
+            identity = _bounded_sample_identity(view)
+            memory_errors, malformed_errors = _bounded_memory_errors(view)
+            coverage = view.get("memory_coverage")
+            memory_host = coverage.get("host") if isinstance(coverage, dict) else None
+            check: dict[str, Any] = {
+                "status": "pending",
+                "rejection_category": None,
+                "fresh": view.get("fresh") if isinstance(view.get("fresh"), bool) else None,
+                "sample": identity[0] if identity is not None else None,
+                "memory_host": memory_host
+                if memory_host in {"available", "unavailable"}
+                else "unknown",
+                "memory_errors": memory_errors if not malformed_errors else ["unknown"],
+            }
+            report["reference_checks"].append(check)
             if (
                 not view.get("fresh")
                 or (view.get("memory_coverage") or {}).get("host") != "available"
             ):
+                check.update(
+                    status="rejected",
+                    rejection_category="freshness" if not view.get("fresh") else "host_memory",
+                )
                 raise ValueError("OOM reference telemetry became stale")
-            current_ids = {str(item["id"]) for item in active(context.reference)}
+            current_ids = reference_incident_ids(check)
             if not current_ids.issubset(original_ids):
+                check.update(status="rejected", rejection_category="incident")
                 raise ValueError("OOM reference opened an unexpected incident")
+            check["status"] = "accepted"
             report["reference_samples"].append(
                 {"identity": _identity(view), "active_incident_ids": sorted(current_ids)}
             )
@@ -1597,7 +1926,7 @@ class OomAdapter(ScenarioAdapter):
                 raise ValueError("prepared OOM leaf is outside the frozen collector scope")
             config = configuration["oom_rule"]
             target_prior = {str(item["id"]) for item in active(context.target)}
-            reference_prior = {str(item["id"]) for item in active(context.reference)}
+            reference_prior = reference_incident_ids()
             baseline_identities: set[tuple[str, str, int, str]] = set()
             baseline_deadline = clock.monotonic() + 60
             baseline_item: dict[str, Any] | None = None
@@ -1673,6 +2002,7 @@ class OomAdapter(ScenarioAdapter):
                         for item in current_target
                     )
                 ):
+                    reference(reference_prior)
                     baseline_identities.add(identity)
                     baseline_item = candidate
                     baseline_events = counters
@@ -1683,7 +2013,7 @@ class OomAdapter(ScenarioAdapter):
                     report["baseline_samples"].clear()
                     baseline_events = None
                     previous_identity = None
-                reference(reference_prior)
+                    reference(reference_prior)
                 if clock.monotonic() >= baseline_deadline:
                     raise TimeoutError(
                         "three fresh empty exact-generation OOM baselines are required"

@@ -40,6 +40,7 @@ from fd_harness import FdHarness
 class FakeClock:
     def __init__(self) -> None:
         self.now = 100.0
+        self.epoch = datetime(2026, 11, 11, tzinfo=UTC)
 
     def monotonic(self) -> float:
         self.now += 0.01
@@ -48,12 +49,17 @@ class FakeClock:
     def sleep(self, seconds: float) -> None:
         self.now += seconds
 
+    def utcnow(self) -> datetime:
+        return self.epoch + timedelta(seconds=self.now)
+
 
 class RecordingTransport:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str, dict[str, Any]]] = []
         self.cgroups: list[str] = []
         self.pids: list[int] = []
+        self.role_receipt = {"boot_id": "00000000-0000-4000-8000-000000000001"}
+        self.restore_selectors: dict[str, Any] | None = None
 
     def inventory(self) -> dict[str, Any]:
         snapshot = {
@@ -86,6 +92,7 @@ class RecordingTransport:
             }
         if scenario == "config" and action == "begin":
             before = arguments["expected_before"] if arguments else {}
+            self.restore_selectors = deepcopy(before.get("selectors"))
             if arguments and "FLEETDOCTOR_CPU_PIDS" in arguments["changes"]:
                 self.pids = [
                     int(item) for item in arguments["changes"]["FLEETDOCTOR_CPU_PIDS"].split(",")
@@ -94,6 +101,9 @@ class RecordingTransport:
         if action in {"cleanup", "release", "destroy"}:
             return {"cleaned": True, "released": True}
         if scenario == "config" and action == "restore":
+            assert self.restore_selectors is not None
+            self.cgroups = list(self.restore_selectors["FLEETDOCTOR_CGROUPS"])
+            self.pids = list(self.restore_selectors["FLEETDOCTOR_CPU_PIDS"])
             return {"phase": "restored"}
         return {"owned": True, "phase": action}
 
@@ -813,6 +823,372 @@ def test_fd_post_start_selector_race_cleans_worker_without_environment_begin(
     assert not [call for call in transport.calls if call[0] == "config" and call[1] == "begin"]
 
 
+def test_fd_waits_for_new_ready_collector_generation_after_selector_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = FakeClock()
+
+    boot = "00000000-0000-4000-8000-000000000001"
+    old_session = "00000000-0000-4000-8000-000000000002"
+    new_session = "00000000-0000-4000-8000-000000000003"
+
+    def view(
+        session: str, sequence: int, observed_offset: float, *, host: str, errors: list[str]
+    ) -> dict[str, Any]:
+        observed = clock.utcnow() + timedelta(seconds=observed_offset)
+        return {
+            "fresh": True,
+            "stale": False,
+            "active_incident_count": 0,
+            "memory_coverage": {"host": host},
+            "memory": {"host": {"errors": errors}},
+            "sample": {
+                "boot_id": boot,
+                "agent_session_id": session,
+                "sequence": sequence,
+                "observed_at": observed.isoformat(),
+            },
+        }
+
+    class Api:
+        def __init__(self) -> None:
+            self.views = [
+                view(old_session, 10, -1, host="available", errors=[]),
+                view(old_session, 11, 0, host="available", errors=[]),
+                view(
+                    new_session,
+                    0,
+                    1,
+                    host="unavailable",
+                    errors=["collection_supervisor_starting"],
+                ),
+                view(new_session, 1, 2, host="available", errors=[]),
+            ]
+            self.reads = 0
+
+        def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            del params
+            assert path == "/nodes/node-a/metrics"
+            self.reads += 1
+            return deepcopy(self.views.pop(0))
+
+    class Harness:
+        after_prepare: Any = None
+
+        def __init__(self, api: Any, injector: Any, *args: Any, **kwargs: Any) -> None:
+            del api, args, kwargs
+            self.injector = injector
+
+        def run(self, phase: str, *, limit: int) -> dict[str, Any]:
+            del phase
+            self.injector.start("a" * 32, limit, 30)
+            assert self.after_prepare is not None
+            self.after_prepare({"pid": 321, "starttime_ticks": 99, "boot_id": boot})
+            self.injector.pressure("a" * 32)
+            self.injector.release("a" * 32)
+            self.injector.cleanup("a" * 32)
+            return {
+                "status": "passed",
+                "incident": {"id": "fd-incident"},
+                "events": {
+                    "pressure_requested": {
+                        "monotonic_seconds": 100.0,
+                        "utc": "2026-11-11T00:00:00+00:00",
+                    },
+                    "actual_resource_trigger_observed": {"monotonic_seconds": 101.0},
+                    "matching_incident_observed": {"monotonic_seconds": 102.0},
+                    "actual_recovery_trigger_observed": {"monotonic_seconds": 103.0},
+                    "matching_recovery_observed": {"monotonic_seconds": 104.0},
+                },
+            }
+
+    monkeypatch.setattr(campaign, "FdHarness", Harness)
+    api = Api()
+    transport = RecordingTransport()
+    result = ADAPTERS["fd"].execute(
+        context(tmp_path, "fd-ready", api=api, transport=transport, clock=clock)
+    )
+    assert result["status"] == "passed"
+    assert api.reads == 4
+    readiness = result["raw_report"]["post_restore_readiness"]
+    assert readiness["stage"] == "post_selector_restore"
+    assert readiness["status"] == "passed"
+    assert readiness["deadline_outcome"] == "ready"
+    assert [item["category"] for item in readiness["checks"]] == [
+        "pre_restore_generation",
+        "collection_supervisor_starting",
+        "ready",
+    ]
+    assert readiness["checks"][-1]["sample"]["agent_session_id"] == new_session
+
+
+@pytest.mark.parametrize("failure_point", ["config_inventory", "metrics_read"])
+def test_fd_post_restore_observation_failure_is_terminal_and_sanitized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+) -> None:
+    clock = FakeClock()
+    boot = "00000000-0000-4000-8000-000000000001"
+    old_session = "00000000-0000-4000-8000-000000000002"
+    canary = "Canary=private-observation-body"
+
+    class Harness:
+        after_prepare: Any = None
+
+        def __init__(self, api: Any, injector: Any, *args: Any, **kwargs: Any) -> None:
+            del api, args, kwargs
+            self.injector = injector
+
+        def run(self, phase: str, *, limit: int) -> dict[str, Any]:
+            del phase
+            self.injector.start("a" * 32, limit, 30)
+            assert self.after_prepare is not None
+            self.after_prepare({"pid": 321, "starttime_ticks": 99, "boot_id": boot})
+            self.injector.cleanup("a" * 32)
+            return {
+                "status": "passed",
+                "incident": {"id": "fd-incident"},
+                "events": {
+                    "pressure_requested": {
+                        "monotonic_seconds": 100.0,
+                        "utc": "2026-11-11T00:00:00+00:00",
+                    },
+                    "actual_resource_trigger_observed": {"monotonic_seconds": 101.0},
+                    "matching_incident_observed": {"monotonic_seconds": 102.0},
+                    "actual_recovery_trigger_observed": {"monotonic_seconds": 103.0},
+                    "matching_recovery_observed": {"monotonic_seconds": 104.0},
+                },
+            }
+
+    class Api:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            del params
+            assert path == "/nodes/node-a/metrics"
+            self.reads += 1
+            if self.reads > 1 and failure_point == "metrics_read":
+                raise PermissionError(canary)
+            return {
+                "fresh": True,
+                "stale": False,
+                "active_incident_count": 0,
+                "memory_coverage": {"host": "available"},
+                "memory": {"host": {"errors": []}},
+                "sample": {
+                    "boot_id": boot,
+                    "agent_session_id": old_session,
+                    "sequence": 10,
+                    "observed_at": clock.utcnow().isoformat(),
+                },
+            }
+
+    class Transport(RecordingTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.inventory_reads = 0
+
+        def inventory(self) -> dict[str, Any]:
+            self.inventory_reads += 1
+            if self.inventory_reads > 2 and failure_point == "config_inventory":
+                raise PermissionError(canary)
+            return super().inventory()
+
+    monkeypatch.setattr(campaign, "FdHarness", Harness)
+    transport = Transport()
+    item = context(
+        tmp_path,
+        f"fd-terminal-{failure_point}",
+        api=Api(),
+        transport=transport,
+        clock=clock,
+    )
+    expected = {
+        "config_inventory": "FD collector configuration could not be verified",
+        "metrics_read": "FD post-restore metrics read failed",
+    }[failure_point]
+    with pytest.raises(ValueError, match=expected):
+        ADAPTERS["fd"].execute(item)
+    retained_text = item.output.read_text(encoding="utf-8")
+    retained = json.loads(retained_text)
+    readiness = retained["post_restore_readiness"]
+    assert readiness["status"] == "failed"
+    assert readiness["deadline_outcome"] == "rejected"
+    assert readiness["failure_category"] == failure_point
+    assert readiness["checks"][-1] == {"status": "failed", "category": failure_point}
+    assert retained["selector_restore"]["phase"] == "restored"
+    assert canary not in retained_text
+    assert not [call for call in transport.calls if call[0] == "oom"]
+
+
+@pytest.mark.parametrize(
+    ("case", "category"),
+    [
+        ("old_generation", "deadline"),
+        ("startup", "deadline"),
+        ("stale", "stale"),
+        ("unknown_error", "memory_errors"),
+        ("permission", "memory_errors"),
+        ("timeout", "memory_errors"),
+        ("stuck", "memory_errors"),
+        ("wrong_boot", "boot_changed"),
+        ("second_session", "session_changed"),
+        ("incident", "incident"),
+        ("config_change", "config_changed"),
+        ("late_read", "deadline"),
+    ],
+)
+def test_fd_post_restore_readiness_fails_closed(tmp_path: Path, case: str, category: str) -> None:
+    clock = FakeClock()
+    transport = RecordingTransport()
+    restored = transport.inventory()
+    boot = transport.role_receipt["boot_id"]
+    old_session = "00000000-0000-4000-8000-000000000002"
+    new_session = "00000000-0000-4000-8000-000000000003"
+    other_session = "00000000-0000-4000-8000-000000000004"
+    restore_completed = clock.utcnow()
+    reads = 0
+
+    def metrics(
+        session: str, sequence: int, *, errors: list[str] | None = None, pre: bool = False
+    ) -> dict[str, Any]:
+        return {
+            "fresh": pre or case != "stale",
+            "stale": False if pre else case == "stale",
+            "active_incident_count": 0 if pre else 1 if case == "incident" else 0,
+            "memory_coverage": {
+                "host": "available"
+                if not errors or errors == ["memory_rate_baseline_unavailable"]
+                else "unavailable"
+            },
+            "memory": {"host": {"errors": errors or []}},
+            "sample": {
+                "boot_id": other_session if case == "wrong_boot" and not pre else boot,
+                "agent_session_id": session,
+                "sequence": sequence,
+                "observed_at": (restore_completed + timedelta(seconds=reads)).isoformat(),
+            },
+        }
+
+    class Api:
+        def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            nonlocal reads
+            del params
+            assert path == "/nodes/node-a/metrics"
+            reads += 1
+            if case == "late_read":
+                clock.now += 61
+            if case == "second_session":
+                return metrics(
+                    new_session if reads == 1 else other_session,
+                    reads - 1,
+                    errors=["collection_supervisor_starting"] if reads == 1 else [],
+                )
+            if case == "old_generation":
+                return metrics(old_session, 10 + reads)
+            errors = {
+                "startup": ["collection_supervisor_starting"],
+                "unknown_error": ["private_remote_error"],
+                "permission": ["cgroup_permission_denied"],
+                "timeout": ["collection_supervisor_timeout"],
+                "stuck": ["collection_supervisor_stuck"],
+            }.get(case, [])
+            return metrics(new_session, reads - 1, errors=errors)
+
+    class ChangedTransport(RecordingTransport):
+        def inventory(self) -> dict[str, Any]:
+            value = super().inventory()
+            if case == "config_change":
+                value["env_sha256"] = "f" * 64
+            return value
+
+    if case == "config_change":
+        changed = ChangedTransport()
+        changed.cgroups = list(transport.cgroups)
+        changed.pids = list(transport.pids)
+        changed.role_receipt = deepcopy(transport.role_receipt)
+        selected_transport: RecordingTransport = changed
+    else:
+        selected_transport = transport
+    item = AdapterContext(
+        api=Api(),
+        transport=selected_transport,
+        manifest=manifest(),
+        target="node-a",
+        reference="node-b",
+        repetition=0,
+        output=tmp_path / f"fd-{case}.json",
+        token="a" * 32,
+        clock=clock,
+        transports={"node-a": selected_transport, "node-b": selected_transport},
+    )
+    with pytest.raises((ValueError, TimeoutError)):
+        campaign._fd_post_restore_readiness(
+            item,
+            {"status": "passed"},
+            pre_restore_view=metrics(old_session, 10, pre=True),
+            restored_inventory=restored,
+            restore_completed_at=restore_completed,
+            expected_role_receipt_sha256=digest(selected_transport.role_receipt),
+        )
+    retained = json.loads(item.output.read_text(encoding="utf-8"))
+    assert retained["post_restore_readiness"]["status"] == "failed"
+    assert retained["post_restore_readiness"]["failure_category"] == category
+
+
+def test_fd_pre_restore_capture_failure_still_restores_selectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Api:
+        def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            del path, params
+            raise PermissionError("synthetic external metrics denial")
+
+    class Harness:
+        after_prepare: Any = None
+
+        def __init__(self, api: Any, injector: Any, *args: Any, **kwargs: Any) -> None:
+            del api, args, kwargs
+            self.injector = injector
+
+        def run(self, phase: str, *, limit: int) -> dict[str, Any]:
+            del phase
+            self.injector.start("a" * 32, limit, 30)
+            assert self.after_prepare is not None
+            self.after_prepare(
+                {
+                    "pid": 321,
+                    "starttime_ticks": 99,
+                    "boot_id": "00000000-0000-4000-8000-000000000001",
+                }
+            )
+            self.injector.cleanup("a" * 32)
+            return {
+                "status": "passed",
+                "incident": {"id": "fd-incident"},
+                "events": {
+                    "pressure_requested": {
+                        "monotonic_seconds": 100.0,
+                        "utc": "2026-11-11T00:00:00+00:00",
+                    },
+                    "actual_resource_trigger_observed": {"monotonic_seconds": 101.0},
+                    "matching_incident_observed": {"monotonic_seconds": 102.0},
+                    "actual_recovery_trigger_observed": {"monotonic_seconds": 103.0},
+                    "matching_recovery_observed": {"monotonic_seconds": 104.0},
+                },
+            }
+
+    monkeypatch.setattr(campaign, "FdHarness", Harness)
+    transport = RecordingTransport()
+    item = context(tmp_path, "fd-capture-failure", api=Api(), transport=transport)
+    with pytest.raises(ValueError, match="pre-restoration sample capture failed"):
+        ADAPTERS["fd"].execute(item)
+    assert ("config", "restore") in [call[:2] for call in transport.calls]
+    retained = json.loads(item.output.read_text(encoding="utf-8"))
+    assert retained["selector_restore"]["phase"] == "restored"
+    assert retained["post_restore_readiness"]["failure_category"] == "pre_restore_capture"
+
+
 def test_lab_wide_lease_blocks_different_batches_and_output_parents(tmp_path: Path) -> None:
     value = manifest()
     lease = lab_lease_path(value["lab"], tmp_path / "common-leases")
@@ -1031,7 +1407,49 @@ def test_six_harness_adapters_execute_real_transport_shapes(
     for scenario in ("disk", "inode", "fd", "network", "dns", "io"):
         transport = RecordingTransport()
         transports[scenario] = transport
-        result = ADAPTERS[scenario].execute(context(tmp_path, scenario, transport=transport))
+        selected_clock = FakeClock()
+        reads = 0
+
+        class FdApi:
+            def __init__(self, selected: RecordingTransport, selected_clock: FakeClock) -> None:
+                self.transport = selected
+                self.clock = selected_clock
+
+            def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+                nonlocal reads
+                del params
+                assert path == "/nodes/node-a/metrics"
+                reads += 1
+                session = (
+                    "00000000-0000-4000-8000-000000000002"
+                    if reads == 1
+                    else "00000000-0000-4000-8000-000000000003"
+                )
+                return {
+                    "fresh": True,
+                    "stale": False,
+                    "active_incident_count": 0,
+                    "memory_coverage": {"host": "available"},
+                    "memory": {"host": {"errors": []}},
+                    "sample": {
+                        "boot_id": self.transport.role_receipt["boot_id"],
+                        "agent_session_id": session,
+                        "sequence": reads,
+                        "observed_at": (
+                            self.clock.utcnow() + timedelta(seconds=1 if reads > 1 else -1)
+                        ).isoformat(),
+                    },
+                }
+
+        result = ADAPTERS[scenario].execute(
+            context(
+                tmp_path,
+                scenario,
+                api=FdApi(transport, selected_clock) if scenario == "fd" else None,
+                transport=transport,
+                clock=selected_clock,
+            )
+        )
         assert result["status"] == "passed"
         assert result["scenario"] == scenario
         assert result["raw_report_sha256"] == digest(result["raw_report"])
@@ -1478,6 +1896,95 @@ def test_oom_readiness_response_completed_after_deadline_cannot_start(tmp_path: 
             )
         )
     assert all(call[1] != "start" for call in transport.calls)
+
+
+def test_oom_rejected_reference_retains_only_sanitized_diagnostics(tmp_path: Path) -> None:
+    cgroup = manifest()["resources"]["oom"]["leaf_paths"][0]
+    transport = OomTransport(cgroup)
+
+    class Api(OomApi):
+        def metrics(self, sequence: int, reference: bool = False) -> dict[str, Any]:
+            value = super().metrics(sequence, reference)
+            if reference:
+                value["memory_coverage"]["host"] = "unavailable"
+                value["memory"]["host"] = {
+                    "errors": ["private remote payload must not be retained"]
+                }
+            return value
+
+    item = context(tmp_path, "oom-reference-diagnostic", api=Api(transport), transport=transport)
+    with pytest.raises(ValueError, match="reference telemetry became stale"):
+        ADAPTERS["oom"].execute(item)
+    retained = json.loads(item.output.read_text(encoding="utf-8"))
+    assert retained["reference_samples"] == []
+    assert retained["baseline_samples"] == []
+    assert retained["reference_checks"] == [
+        {
+            "status": "rejected",
+            "rejection_category": "host_memory",
+            "fresh": True,
+            "sample": None,
+            "memory_host": "unavailable",
+            "memory_errors": ["unknown"],
+        }
+    ]
+    assert "private remote payload" not in item.output.read_text(encoding="utf-8")
+    assert transport.calls[-1][1] == "release"
+
+
+@pytest.mark.parametrize(
+    "failure_point",
+    ["reference_metrics", "reference_incident_initial", "reference_incident_ongoing"],
+)
+def test_oom_reference_read_exception_is_sanitized_and_releases(
+    tmp_path: Path, failure_point: str
+) -> None:
+    cgroup = manifest()["resources"]["oom"]["leaf_paths"][0]
+    transport = OomTransport(cgroup)
+    canary = "Canary=private-reference-response"
+
+    class Api(OomApi):
+        def __init__(self, selected: OomTransport) -> None:
+            super().__init__(selected)
+            self.reference_incident_reads = 0
+
+        def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            if path == "/nodes/node-b/metrics" and failure_point == "reference_metrics":
+                raise PermissionError(canary)
+            if path == "/diagnoses" and params and params.get("node") == "node-b":
+                self.reference_incident_reads += 1
+                if failure_point == "reference_incident_initial" or (
+                    failure_point == "reference_incident_ongoing"
+                    and self.reference_incident_reads > 1
+                ):
+                    raise PermissionError(canary)
+            return super().get(path, params)
+
+    item = context(
+        tmp_path,
+        f"oom-reference-{failure_point}",
+        api=Api(transport),
+        transport=transport,
+    )
+    expected = (
+        "OOM reference metrics observation failed"
+        if failure_point == "reference_metrics"
+        else "OOM reference incident observation failed"
+    )
+    with pytest.raises(ValueError, match=expected):
+        ADAPTERS["oom"].execute(item)
+    retained_text = item.output.read_text(encoding="utf-8")
+    retained = json.loads(retained_text)
+    assert retained["reference_samples"] == []
+    assert retained["baseline_samples"] == []
+    assert retained["reference_checks"][-1]["status"] == "rejected"
+    assert retained["reference_checks"][-1]["rejection_category"] == (
+        "metrics_read" if failure_point == "reference_metrics" else "incident_read"
+    )
+    assert retained["failure"] == f"ValueError: {expected}"
+    assert canary not in retained_text
+    assert all(call[1] != "start" for call in transport.calls)
+    assert transport.calls[-1][1] == "release"
 
 
 def test_oom_adapter_executes_exact_generation_real_kill_and_recovery(tmp_path: Path) -> None:
